@@ -30,12 +30,38 @@ window.login = async function () {
 };
 
 window.logout = async function () {
+  stopTokenRefreshTimer();
   await signOut(auth);
 };
+
+// Firebase ID tokens expire after 1 hour. getIdToken() inside api() already
+// refreshes automatically when a token has expired, and api() also retries
+// once on a 401 as a fallback - but proactively refreshing every 45 minutes
+// means a session left open all day never even hits that edge case.
+let tokenRefreshTimer = null;
+function startTokenRefreshTimer() {
+  stopTokenRefreshTimer();
+  tokenRefreshTimer = setInterval(async () => {
+    if (auth.currentUser) {
+      try {
+        currentToken = await auth.currentUser.getIdToken(true);
+      } catch {
+        // network hiccup during background refresh - next api() call will retry
+      }
+    }
+  }, 45 * 60 * 1000);
+}
+function stopTokenRefreshTimer() {
+  if (tokenRefreshTimer) {
+    clearInterval(tokenRefreshTimer);
+    tokenRefreshTimer = null;
+  }
+}
 
 onAuthStateChanged(auth, async (user) => {
   if (user) {
     currentToken = await user.getIdToken();
+    startTokenRefreshTimer();
     document.getElementById("loginView").classList.add("hidden");
     document.getElementById("appView").classList.remove("hidden");
 
@@ -65,6 +91,7 @@ onAuthStateChanged(auth, async (user) => {
       await loadLessonPlanReviewQueue();
     }
   } else {
+    stopTokenRefreshTimer();
     currentToken = null;
     document.getElementById("loginView").classList.remove("hidden");
     document.getElementById("appView").classList.add("hidden");
@@ -155,8 +182,17 @@ function decodeJwtPayload(token) {
 
 // ---------- API helper ----------
 
-async function api(path, options = {}) {
-  const token = auth.currentUser ? await auth.currentUser.getIdToken() : currentToken;
+// Fires a request with a fresh ID token. If the token was expired or claims
+// were just updated server-side (e.g. role/classId changed), the first
+// attempt can 401 - in that case we force a real token refresh and retry
+// ONCE before giving up, instead of asking the person to log out and back in.
+async function api(path, options = {}, isRetry = false) {
+  if (!auth.currentUser) {
+    throw new Error("You've been signed out - please log in again.");
+  }
+
+  const token = await auth.currentUser.getIdToken(isRetry);
+  currentToken = token; // keep in sync in case anything still reads currentToken directly
 
   let res;
   try {
@@ -173,6 +209,13 @@ async function api(path, options = {}) {
     // take 30-60s to wake up on the first request - this usually shows up
     // as a raw "Failed to fetch" rather than a proper HTTP error.
     throw new Error("Couldn't reach the server. If it's been idle a while it may be waking up - wait a few seconds and try again.");
+  }
+
+  if (res.status === 401 && !isRetry) {
+    // Force-refresh (getIdToken(true)) and retry exactly once - covers both
+    // a genuinely expired token and claims that changed since this session
+    // started (e.g. role was updated via create-team-member.js).
+    return api(path, options, true);
   }
 
   if (!res.ok) {
