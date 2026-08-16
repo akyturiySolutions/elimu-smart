@@ -1,0 +1,364 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Elimu Smart Admin</title>
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=Lora:wght@500;600;700&family=Karla:wght@400;500;600;700&display=swap');
+
+  :root {
+    --parchment: #FAF3E7;
+    --card: #FFFDF9;
+    --ink: #2B2118;
+    --ink-soft: #6B5D4F;
+    --indigo: #2C3E6B;
+    --indigo-dark: #1F2D4E;
+    --ochre: #C0842A;
+    --ochre-dark: #9C6A1E;
+    --sage: #3F7350;
+    --sage-dark: #2F5A3D;
+    --brick: #9C4438;
+    --brick-dark: #7E362C;
+    --line: #E7DAC0;
+    --wa-green: #3C8C5B;
+    --wa-green-dark: #316F48;
+  }
+
+  * { box-sizing: border-box; }
+
+  body {
+    font-family: 'Karla', sans-serif;
+    max-width: 900px;
+    margin: 0 auto;
+    padding: 24px 20px 60px;
+    background: var(--parchment);
+    color: var(--ink);
+    line-height: 1.5;
+  }
+
+  h1 {
+    font-family: 'Lora', serif;
+    font-weight: 700;
+    color: var(--indigo-dark);
+    font-size: 26px;
+    margin: 0 0 4px;
+    padding-bottom: 14px;
+    border-bottom: 3px solid transparent;
+    border-image: repeating-linear-gradient(115deg, var(--indigo) 0 14px, var(--ochre) 14px 22px, var(--sage) 22px 30px) 3;
+  }
+
+  h2 {
+    font-family: 'Lora', serif;
+    font-weight: 600;
+    font-size: 18px;
+    color: var(--indigo-dark);
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-top: 0;
+  }
+
+  h3 { font-family: 'Lora', serif; color: var(--ink-soft); }
+
+  .tier-badge {
+    font-family: 'Karla', sans-serif;
+    font-size: 11px;
+    font-weight: 600;
+    letter-spacing: 0.02em;
+    padding: 3px 10px;
+    border-radius: 12px;
+    color: #fff;
+  }
+  .tier-1 { background: var(--ink-soft); }
+  .tier-2 { background: var(--indigo); }
+  .tier-3 { background: var(--ochre-dark); }
+
+  .card {
+    background: var(--card);
+    border-radius: 10px;
+    padding: 18px 20px;
+    margin-bottom: 18px;
+    border: 1px solid var(--line);
+    box-shadow: 0 2px 8px rgba(43, 33, 24, 0.06);
+    position: relative;
+    overflow: hidden;
+  }
+  /* Signature woven trim, echoing kitenge fabric borders - marks every
+     section as its own "entry" in the school register. */
+  .card::before {
+    content: "";
+    position: absolute;
+    top: 0; left: 0; right: 0;
+    height: 4px;
+    background: repeating-linear-gradient(115deg, var(--indigo) 0 14px, var(--ochre) 14px 22px, var(--sage) 22px 30px);
+  }
+
+  input, select, textarea {
+    font-family: 'Karla', sans-serif;
+    font-size: 14px;
+    padding: 9px 10px;
+    margin: 5px 0;
+    width: 100%;
+    box-sizing: border-box;
+    border: 1px solid var(--line);
+    border-radius: 6px;
+    background: #fff;
+    color: var(--ink);
+  }
+  input:focus, select:focus, textarea:focus {
+    outline: none;
+    border-color: var(--indigo);
+    box-shadow: 0 0 0 3px rgba(44, 62, 107, 0.12);
+  }
+  input[readonly] { background: var(--parchment); color: var(--ink-soft); }
+  input:disabled, select:disabled, textarea:disabled, button:disabled {
+    cursor: not-allowed;
+    background: var(--line);
+    color: var(--ink-soft);
+  }
+  textarea { resize: vertical; line-height: 1.6; font-family: 'Karla', sans-serif; min-height: 90px; }
+
+  button {
+    font-family: 'Karla', sans-serif;
+    font-weight: 600;
+    font-size: 14px;
+    padding: 9px 18px;
+    background: var(--indigo);
+    color: #fff;
+    border: none;
+    border-radius: 6px;
+    cursor: pointer;
+    margin-top: 8px;
+    transition: background 0.15s ease;
+  }
+  button:hover { background: var(--indigo-dark); }
+
+  .wa-btn { background: var(--wa-green); }
+  .wa-btn:hover { background: var(--wa-green-dark); }
+
+  table { width: 100%; border-collapse: collapse; margin-top: 14px; font-size: 14px; }
+  th {
+    font-family: 'Karla', sans-serif;
+    font-weight: 700;
+    font-size: 12px;
+    letter-spacing: 0.03em;
+    text-transform: uppercase;
+    color: var(--ink-soft);
+    text-align: left;
+    padding: 8px;
+    border-bottom: 2px solid var(--line);
+  }
+  td { text-align: left; padding: 10px 8px; border-bottom: 1px solid var(--line); }
+  tr:hover td { background: rgba(192, 132, 42, 0.06); }
+  .schoolClass-group-header td {
+    background: var(--parchment);
+    font-family: 'Lora', serif;
+    font-weight: 700;
+    color: var(--indigo-dark);
+    font-size: 14px;
+    padding: 10px 8px;
+  }
+  .schoolClass-group-header:hover td { background: var(--parchment); }
+
+  #loginView { max-width: 380px; margin: 70px auto; text-align: center; }
+  #loginView h1 { border-image: none; border-bottom: none; }
+
+  .hidden { display: none; }
+  .error { color: var(--brick-dark); font-size: 14px; }
+
+  .actions button { margin: 0 4px 4px 0; padding: 5px 12px; font-size: 13px; }
+  .actions .del { background: var(--brick); }
+  .actions .del:hover { background: var(--brick-dark); }
+
+  .attend-row {
+    display: flex; align-items: center; padding: 8px 4px;
+    border-bottom: 1px solid var(--line);
+  }
+  .attend-row input[type="checkbox"] { width: auto; margin-right: 10px; accent-color: var(--sage); }
+
+  .absent-row {
+    display: flex; justify-content: space-between; align-items: center;
+    padding: 8px 4px; border-bottom: 1px solid var(--line);
+  }
+
+  .hint { font-size: 13px; color: var(--ink-soft); margin: 4px 0 10px; }
+
+  #roleBadge {
+    display: inline-block;
+    background: var(--card);
+    border: 1px solid var(--line);
+    border-radius: 6px;
+    padding: 5px 12px;
+    margin: 8px 0 18px;
+  }
+
+  /* Tables scroll horizontally instead of breaking the page layout on
+     narrow screens - the columns themselves stay untouched. */
+  .table-wrap { overflow-x: auto; -webkit-overflow-scrolling: touch; margin-top: 14px; }
+  .table-wrap table { margin-top: 0; min-width: 480px; }
+
+  /* Parents list caps at ~12 rows visible, then scrolls vertically instead
+     of pushing the rest of the dashboard further down the page. */
+  .parents-scroll { max-height: 540px; overflow-y: auto; }
+  .parents-scroll thead th {
+    position: sticky; top: 0; background: var(--card); z-index: 1;
+  }
+  .parents-scroll::-webkit-scrollbar { width: 8px; }
+  .parents-scroll::-webkit-scrollbar-track { background: var(--parchment); }
+  .parents-scroll::-webkit-scrollbar-thumb { background: var(--indigo); border-radius: 4px; }
+
+  @media (max-width: 600px) {
+    body { padding: 16px 12px 48px; }
+    h1 { font-size: 22px; }
+    h2 { font-size: 16px; }
+    .card { padding: 14px 14px; border-radius: 8px; }
+
+    /* Bigger tap targets - anything under ~44px is hard to hit on a phone. */
+    button { padding: 12px 16px; font-size: 15px; min-height: 44px; }
+    input, select, textarea { padding: 11px 10px; font-size: 16px; } /* 16px prevents iOS auto-zoom on focus */
+
+    /* Action buttons (Message/Delete/Edit) stack full-width instead of
+       squeezing side by side, so they stay easy to tap with a thumb. */
+    .actions { display: flex; flex-direction: column; align-items: stretch; }
+    .actions button, .actions a { width: 100%; margin: 3px 0; }
+    .actions a button { width: 100%; }
+
+    .absent-row, .attend-row { flex-wrap: wrap; }
+    .absent-row a, .absent-row button { margin-top: 6px; }
+  }
+</style>
+</head>
+<body>
+
+<div id="loginView" class="card">
+  <h1>Elimu Smart</h1>
+  <input id="loginEmail" type="email" placeholder="Admin email">
+  <input id="loginPassword" type="password" placeholder="Password">
+  <button onclick="login()">Log In</button>
+  <p id="loginError" class="error"></p>
+</div>
+
+<div id="appView" class="hidden">
+  <h1>Elimu Smart Admin</h1>
+  <button onclick="logout()" style="background:#888;">Log Out</button>
+  <p id="roleBadge" style="font-size:14px;color:#555;font-weight:bold;"></p>
+
+  <div class="card">
+    <h2>Parent Portal Link</h2>
+    <p class="hint">Share this link with parents so they can find their schoolClass and tap "Join WhatsApp Group" themselves.</p>
+    <input id="portalLinkDisplay" readonly>
+    <button onclick="copyPortalLink()">Copy Link</button>
+    <p id="portalLinkStatus" style="font-size:13px;"></p>
+  </div>
+
+  <div class="card" id="addParentCard">
+    <h2>Add Parent</h2>
+    <input id="parentName" placeholder="Full name">
+    <input id="parentPhone" placeholder="Phone (e.g. 07XXXXXXXX)">
+    <input id="parentWhatsapp" placeholder="WhatsApp number (leave blank to use phone)">
+    <select id="parentClass"><option value="">-- No schoolClass --</option></select>
+    <button onclick="addMember()">Add Parent</button>
+  </div>
+
+  <div class="card" id="bulkAddParentCard">
+    <h2>Bulk Add Parents</h2>
+    <p class="hint">Onboarding an existing WhatsApp group's parents? One line per person: <strong>Name, Phone</strong>. If you only have a phone number, just paste the number alone.</p>
+    <select id="bulkParentClass"><option value="">-- Choose a schoolClass --</option></select>
+    <textarea id="bulkMemberText" rows="6" placeholder="Peter Mwangi, 0722123456
+Jane Wanjiru, 0733987654
+0711222333"></textarea>
+    <button onclick="bulkAddMembers()">Add All</button>
+    <p id="bulkAddStatus" style="font-size:13px;"></p>
+  </div>
+
+  <div class="card">
+    <h2>Parents <span class="tier-badge tier-2">Level 2: Click-to-Chat</span></h2>
+    <p class="hint">Grouped by schoolClass. Tap Message to open WhatsApp with that parent, prefilled with a welcome note. Scroll within the list if there are more than 12.</p>
+    <p id="parentTotalCount" style="font-weight:600;color:var(--indigo-dark);"></p>
+    <select id="parentSearchClass"><option value="">-- All classes --</option></select>
+    <input id="parentSearchPhone" type="tel" placeholder="Search by phone number">
+    <button onclick="filterMembers()">Search</button>
+    <button onclick="clearMemberSearch()" style="background:#888;">Clear</button>
+    <div class="table-wrap parents-scroll"><table>
+      <thead><tr><th>Name</th><th>Phone</th><th>Class</th><th>Actions</th></tr></thead>
+      <tbody id="parentsTable"></tbody>
+    </table></div>
+  </div>
+
+  <div class="card" id="addClassCard">
+    <h2 id="classFormTitle">Add Class</h2>
+    <input id="className" placeholder="Class name (e.g. Bethany Class)">
+    <input id="classTeacher" placeholder="Teacher name">
+    <input id="classTeacherPhone" placeholder="Teacher phone">
+    <input id="classDay" placeholder="Meeting day (e.g. Wednesday)">
+    <input id="classTime" placeholder="Meeting time (e.g. 6:00 PM)">
+    <input id="classGroupLink" placeholder="WhatsApp group invite link (https://chat.whatsapp.com/...)">
+    <button id="classSubmitBtn" onclick="addClass()">Add Class</button>
+    <button id="classCancelBtn" onclick="cancelEditClass()" style="background:#888;display:none;">Cancel Edit</button>
+  </div>
+
+  <div class="card">
+    <h2>Classes <span class="tier-badge tier-1">Level 1: Group Link</span></h2>
+    <p class="hint">The admin pastes the group's invite link once — Elimu Smart never creates or manages the group itself.</p>
+    <div class="table-wrap"><table>
+      <thead><tr><th>Name</th><th>Teacher</th><th>Meeting</th><th>Group</th><th>Actions</th></tr></thead>
+      <tbody id="classesTable"></tbody>
+    </table></div>
+  </div>
+
+  <div class="card" id="teacherInviteCard" style="display:none;">
+    <h2>Teacher Invite Link <span class="tier-badge tier-2">Level 2: Click-to-Chat</span></h2>
+    <p class="hint" id="teacherInviteHint"></p>
+    <input id="teacherInviteLink" readonly>
+    <button onclick="copyLeaderInviteLink()">Copy Link</button>
+    <a id="teacherInviteWaLink" href="#" target="_blank" rel="noopener"><button class="wa-btn" type="button">Send via WhatsApp</button></a>
+    <p id="teacherInviteStatus" style="font-size:13px;"></p>
+  </div>
+
+
+  <div class="card">
+    <h2>Attendance</h2>
+    <select id="attendanceClass" onchange="loadAttendanceForm()"><option value="">-- Choose a schoolClass --</option></select>
+    <input id="attendanceDate" type="date">
+    <div id="attendanceList"></div>
+    <button id="saveAttendanceBtn" onclick="saveAttendance()">Save Attendance</button>
+    <p id="attendanceStatus" style="font-size:13px;"></p>
+  </div>
+
+  <div class="card" id="absenteesCard" style="display:none;">
+    <h2>Absent This Meeting <span class="tier-badge tier-2">Level 2: Click-to-Chat</span></h2>
+    <p class="hint">Review the message, then tap Send — it opens WhatsApp with the reminder ready. No copy-paste.</p>
+    <div id="absenteesList"></div>
+  </div>
+
+  <div class="card" id="insightsCard" style="display:none;">
+    <h2>Attendance Insights</h2>
+    <p class="hint">Based on the last several recorded meetings for this schoolClass.</p>
+
+    <h3 style="font-size:15px;margin-top:16px;">Recent Meetings</h3>
+    <div class="table-wrap"><table>
+      <thead><tr><th>Date</th><th>Present</th></tr></thead>
+      <tbody id="historyTable"></tbody>
+    </table></div>
+
+    <h3 style="font-size:15px;margin-top:16px;">Parents Needing a Check-in <span class="tier-badge tier-2">Level 2: Click-to-Chat</span></h3>
+    <p class="hint">Flagged when attendance rate is below 50% over recent meetings (with at least 2 meetings recorded).</p>
+    <div id="lowAttendanceList"></div>
+  </div>
+
+  <div class="card" id="broadcastCard">
+    <h2>Send to Class <span class="tier-badge tier-3">Level 3: Automated</span></h2>
+    <p class="hint">Sends automatically to every parent's WhatsApp via the WhatsApp Business API — no manual tap needed. Requires the number/template setup in <code>docs/WHATSAPP_SETUP_CHECKLIST.md</code>.</p>
+    <p id="broadcastLockedNote" class="error" style="display:none;">Only admins can send automated broadcasts. Ask your admin to send this from their dashboard.</p>
+    <select id="broadcastClass"><option value="">-- Choose a schoolClass --</option></select>
+    <textarea id="broadcastMessage" rows="4" placeholder="e.g. Good evening! Just a reminder that we have our schoolClass meeting tomorrow at 6pm. We'd love to see you there — bring a friend if you can!"></textarea>
+    <button id="broadcastSendBtn" onclick="sendBroadcast()">Send Automatically</button>
+    <p id="broadcastStatus" style="font-size:13px;"></p>
+  </div>
+</div>
+
+<script type="module" src="/js/firebase-config.js"></script>
+<script type="module" src="/js/admin.js"></script>
+</body>
+</html>
