@@ -151,7 +151,7 @@
   }
   td { text-align: left; padding: 10px 8px; border-bottom: 1px solid var(--line); }
   tr:hover td { background: rgba(192, 132, 42, 0.06); }
-  .schoolClass-group-header td {
+  .class-group-header td {
     background: var(--parchment);
     font-family: 'Lora', serif;
     font-weight: 700;
@@ -159,7 +159,7 @@
     font-size: 14px;
     padding: 10px 8px;
   }
-  .schoolClass-group-header:hover td { background: var(--parchment); }
+  .class-group-header:hover td { background: var(--parchment); }
 
   #loginView { max-width: 380px; margin: 70px auto; text-align: center; }
   #loginView h1 { border-image: none; border-bottom: none; }
@@ -246,7 +246,7 @@
 
   <div class="card">
     <h2>Parent Portal Link</h2>
-    <p class="hint">Share this link with parents so they can find their schoolClass and tap "Join WhatsApp Group" themselves.</p>
+    <p class="hint">Share this link with parents so they can find their class and tap "Join WhatsApp Group" themselves.</p>
     <input id="portalLinkDisplay" readonly>
     <button onclick="copyPortalLink()">Copy Link</button>
     <p id="portalLinkStatus" style="font-size:13px;"></p>
@@ -257,14 +257,14 @@
     <input id="parentName" placeholder="Full name">
     <input id="parentPhone" placeholder="Phone (e.g. 07XXXXXXXX)">
     <input id="parentWhatsapp" placeholder="WhatsApp number (leave blank to use phone)">
-    <select id="parentClass"><option value="">-- No schoolClass --</option></select>
+    <select id="parentClass"><option value="">-- No Class --</option></select>
     <button onclick="addMember()">Add Parent</button>
   </div>
 
   <div class="card" id="bulkAddParentCard">
     <h2>Bulk Add Parents</h2>
     <p class="hint">Onboarding an existing WhatsApp group's parents? One line per person: <strong>Name, Phone</strong>. If you only have a phone number, just paste the number alone.</p>
-    <select id="bulkParentClass"><option value="">-- Choose a schoolClass --</option></select>
+    <select id="bulkParentClass"><option value="">-- Choose a Class --</option></select>
     <textarea id="bulkMemberText" rows="6" placeholder="Peter Mwangi, 0722123456
 Jane Wanjiru, 0733987654
 0711222333"></textarea>
@@ -274,7 +274,7 @@ Jane Wanjiru, 0733987654
 
   <div class="card">
     <h2>Parents <span class="tier-badge tier-2">Level 2: Click-to-Chat</span></h2>
-    <p class="hint">Grouped by schoolClass. Tap Message to open WhatsApp with that parent, prefilled with a welcome note. Scroll within the list if there are more than 12.</p>
+    <p class="hint">Grouped by class. Tap Message to open WhatsApp with that parent, prefilled with a welcome note. Scroll within the list if there are more than 12.</p>
     <p id="parentTotalCount" style="font-weight:600;color:var(--indigo-dark);"></p>
     <select id="parentSearchClass"><option value="">-- All classes --</option></select>
     <input id="parentSearchPhone" type="tel" placeholder="Search by phone number">
@@ -311,7 +311,7 @@ Jane Wanjiru, 0733987654
     <h2>Teacher Invite Link <span class="tier-badge tier-2">Level 2: Click-to-Chat</span></h2>
     <p class="hint" id="teacherInviteHint"></p>
     <input id="teacherInviteLink" readonly>
-    <button onclick="copyLeaderInviteLink()">Copy Link</button>
+    <button onclick="copyTeacherInviteLink()">Copy Link</button>
     <a id="teacherInviteWaLink" href="#" target="_blank" rel="noopener"><button class="wa-btn" type="button">Send via WhatsApp</button></a>
     <p id="teacherInviteStatus" style="font-size:13px;"></p>
   </div>
@@ -319,7 +319,7 @@ Jane Wanjiru, 0733987654
 
   <div class="card">
     <h2>Attendance</h2>
-    <select id="attendanceClass" onchange="loadAttendanceForm()"><option value="">-- Choose a schoolClass --</option></select>
+    <select id="attendanceClass" onchange="loadAttendanceForm()"><option value="">-- Choose a Class --</option></select>
     <input id="attendanceDate" type="date">
     <div id="attendanceList"></div>
     <button id="saveAttendanceBtn" onclick="saveAttendance()">Save Attendance</button>
@@ -334,7 +334,7 @@ Jane Wanjiru, 0733987654
 
   <div class="card" id="insightsCard" style="display:none;">
     <h2>Attendance Insights</h2>
-    <p class="hint">Based on the last several recorded meetings for this schoolClass.</p>
+    <p class="hint">Based on the last several recorded meetings for this class.</p>
 
     <h3 style="font-size:15px;margin-top:16px;">Recent Meetings</h3>
     <div class="table-wrap"><table>
@@ -351,10 +351,51 @@ Jane Wanjiru, 0733987654
     <h2>Send to Class <span class="tier-badge tier-3">Level 3: Automated</span></h2>
     <p class="hint">Sends automatically to every parent's WhatsApp via the WhatsApp Business API — no manual tap needed. Requires the number/template setup in <code>docs/WHATSAPP_SETUP_CHECKLIST.md</code>.</p>
     <p id="broadcastLockedNote" class="error" style="display:none;">Only admins can send automated broadcasts. Ask your admin to send this from their dashboard.</p>
-    <select id="broadcastClass"><option value="">-- Choose a schoolClass --</option></select>
-    <textarea id="broadcastMessage" rows="4" placeholder="e.g. Good evening! Just a reminder that we have our schoolClass meeting tomorrow at 6pm. We'd love to see you there — bring a friend if you can!"></textarea>
+    <select id="broadcastClass"><option value="">-- Choose a Class --</option></select>
+    <textarea id="broadcastMessage" rows="4" placeholder="e.g. Good evening! Just a reminder that we have our class meeting tomorrow at 6pm. We'd love to see you there — bring a friend if you can!"></textarea>
     <button id="broadcastSendBtn" onclick="sendBroadcast()">Send Automatically</button>
     <p id="broadcastStatus" style="font-size:13px;"></p>
+  </div>
+
+  <div class="card" id="addLessonPlanCard">
+    <h2 id="lessonPlanFormTitle">New Lesson Plan</h2>
+    <p class="hint">Term and subject are required. Everything else can be filled in or left for later — it stays a draft until you submit it for your admin's approval.</p>
+    <input id="lpTerm" placeholder="Term (e.g. Term 2)">
+    <input id="lpWeek" placeholder="Week (e.g. 3)">
+    <input id="lpDate" type="date">
+    <input id="lpSubject" placeholder="Subject (e.g. Mathematics)">
+    <input id="lpStrand" placeholder="Strand (e.g. Numbers)">
+    <input id="lpSubStrand" placeholder="Sub-strand (e.g. Addition)">
+    <textarea id="lpObjectives" rows="2" placeholder="Learning outcomes / objectives, one per line"></textarea>
+    <textarea id="lpActivities" rows="2" placeholder="Lesson activities, one per line"></textarea>
+    <textarea id="lpResources" rows="2" placeholder="Resources needed, one per line"></textarea>
+    <input id="lpAssessment" placeholder="Assessment method (e.g. Oral questions, written exercise)">
+    <button id="lpSaveBtn" onclick="saveLessonPlan()">Save Draft</button>
+    <button id="lpCancelBtn" onclick="cancelEditLessonPlan()" style="background:#888;display:none;">Cancel Edit</button>
+    <p id="lessonPlanStatus" style="font-size:13px;"></p>
+  </div>
+
+  <div class="card" id="myLessonPlansCard" style="display:none;">
+    <h2>My Lesson Plans</h2>
+    <p class="hint">Draft plans can be edited or submitted for approval. Once submitted, only your admin can send it back to draft.</p>
+    <div class="table-wrap"><table>
+      <thead><tr><th>Term / Week</th><th>Subject</th><th>Strand</th><th>Status</th><th>Actions</th></tr></thead>
+      <tbody id="myLessonPlansTable"></tbody>
+    </table></div>
+  </div>
+
+  <div class="card" id="lessonPlanReviewCard" style="display:none;">
+    <h2>Lesson Plan Review Queue</h2>
+    <p class="hint">Submitted plans awaiting your approval. Approve, or send back to draft with a note for the teacher.</p>
+    <select id="lpReviewFilter" onchange="loadLessonPlanReviewQueue()">
+      <option value="submitted">Awaiting Approval</option>
+      <option value="approved">Approved</option>
+      <option value="">All</option>
+    </select>
+    <div class="table-wrap"><table>
+      <thead><tr><th>Class</th><th>Term / Week</th><th>Subject</th><th>Teacher</th><th>Status</th><th>Actions</th></tr></thead>
+      <tbody id="lessonPlanReviewTable"></tbody>
+    </table></div>
   </div>
 </div>
 

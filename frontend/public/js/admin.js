@@ -11,8 +11,8 @@ let classesCache = [];
 let parentsCache = [];
 let editingClassId = null;
 let currentRole = "admin";
-let currentCellId = null;
-let currentChurchId = null;
+let currentClassId = null;
+let currentSchoolId = null;
 
 // ---------- Auth ----------
 
@@ -41,8 +41,8 @@ onAuthStateChanged(auth, async (user) => {
 
     const claims = decodeJwtPayload(currentToken);
     currentRole = claims?.role || "admin"; // pre-role accounts default to admin
-    currentCellId = claims?.classId || null;
-    currentChurchId = claims?.schoolId || null;
+    currentClassId = claims?.classId || null;
+    currentSchoolId = claims?.schoolId || null;
 
     if (claims?.schoolId) {
       const portalUrl = `${window.location.origin}/portal.html?school=${encodeURIComponent(claims.schoolId)}`;
@@ -51,12 +51,18 @@ onAuthStateChanged(auth, async (user) => {
 
     applyRoleUI();
     await loadClasses();
-    await loadMembers();
+    await loadParents();
 
     // Now that parentsCache is populated, actually render the roll call
     // for teachers (dropdown was pre-selected in loadClasses above).
     if (currentRole === "teacher" && document.getElementById("attendanceClass").value) {
       await window.loadAttendanceForm();
+    }
+
+    if (currentRole === "teacher") {
+      await loadMyLessonPlans();
+    } else {
+      await loadLessonPlanReviewQueue();
     }
   } else {
     currentToken = null;
@@ -82,6 +88,9 @@ function applyRoleUI() {
   const addParentCard = document.getElementById("addParentCard");
   const bulkAddParentCard = document.getElementById("bulkAddParentCard");
   const saveAttendanceBtn = document.getElementById("saveAttendanceBtn");
+  const addLessonPlanCard = document.getElementById("addLessonPlanCard");
+  const myLessonPlansCard = document.getElementById("myLessonPlansCard");
+  const lessonPlanReviewCard = document.getElementById("lessonPlanReviewCard");
 
   if (currentRole === "teacher") {
     addClassCard.style.display = "none"; // teachers can edit their own class, not create new ones
@@ -89,6 +98,9 @@ function applyRoleUI() {
     bulkAddParentCard.style.display = "block";
     saveAttendanceBtn.style.display = "inline-block";
     setBroadcastCardDisabled(true); // visible, but greyed out - admin-only action
+    addLessonPlanCard.style.display = "block";
+    myLessonPlansCard.style.display = "block";
+    lessonPlanReviewCard.style.display = "none";
   } else {
     // admin gets full access
     addClassCard.style.display = "block";
@@ -96,6 +108,9 @@ function applyRoleUI() {
     bulkAddParentCard.style.display = "block";
     saveAttendanceBtn.style.display = "inline-block";
     setBroadcastCardDisabled(false);
+    addLessonPlanCard.style.display = "none"; // admin doesn't author plans, only reviews them
+    myLessonPlansCard.style.display = "none";
+    lessonPlanReviewCard.style.display = "block";
   }
 }
 
@@ -186,7 +201,7 @@ function buildClickToChatLink(phone, message) {
 
 // ---------- Parents ----------
 
-async function loadMembers() {
+async function loadParents() {
   const { parents } = await api("/parents");
   parentsCache = parents;
   renderParentsTable(parentsCache);
@@ -300,7 +315,7 @@ window.addMember = async function () {
   document.getElementById("parentName").value = "";
   document.getElementById("parentPhone").value = "";
   document.getElementById("parentWhatsapp").value = "";
-  await loadMembers();
+  await loadParents();
 };
 
 // Parses one parent per line: "Name, Phone" or just "Phone" alone (name
@@ -342,7 +357,7 @@ window.bulkAddMembers = async function () {
     statusEl.textContent = "Added " + result.created + " parent(s)" +
       (result.skipped ? ", skipped " + result.skipped + " invalid line(s)" : "") + ".";
     document.getElementById("bulkMemberText").value = "";
-    await loadMembers();
+    await loadParents();
   } catch (err) {
     statusEl.textContent = "Error: " + err.message;
   }
@@ -351,7 +366,7 @@ window.bulkAddMembers = async function () {
 async function deleteMember(id) {
   if (!confirm("Delete this parent?")) return;
   await api(`/parents/${id}`, { method: "DELETE" });
-  await loadMembers();
+  await loadParents();
 }
 
 // ---------- Classes ----------
@@ -409,7 +424,7 @@ async function loadClasses() {
 
   // Teachers only ever have one class (the backend already scopes GET /classes
   // to it) - pre-select it so roll call is one less tap. The actual
-  // attendance form loads after loadMembers() too (see onAuthStateChanged),
+  // attendance form loads after loadParents() too (see onAuthStateChanged),
   // since it needs parentsCache populated first.
   if (currentRole === "teacher" && classes.length === 1) {
     attendanceSelect.value = classes[0].id;
@@ -516,7 +531,7 @@ window.addClass = async function () {
 
   cancelEditClass(); // resets form + editingClassId back to add-mode
   await loadClasses();
-  await loadMembers();
+  await loadParents();
 };
 
 // ---------- Broadcast (Level 3 — automated via WhatsApp Business API) ----------
@@ -537,7 +552,7 @@ window.sendBroadcast = async function () {
 
   statusEl.textContent = "Sending...";
   try {
-    const result = await api(`/broadcast/schoolClass/${classId}`, {
+    const result = await api(`/broadcast/class/${classId}`, {
       method: "POST",
       body: JSON.stringify({ message }),
     });
@@ -570,7 +585,7 @@ window.loadAttendanceForm = async function () {
   const date = document.getElementById("attendanceDate").value || new Date().toISOString().slice(0, 10);
   let existing = { records: {} };
   try {
-    existing = await api(`/attendance/schoolClass/${classId}?date=${date}`);
+    existing = await api(`/attendance/class/${classId}?date=${date}`);
   } catch (err) {
     // no existing record for this date is fine
   }
@@ -625,7 +640,7 @@ window.saveAttendance = async function () {
 
   statusEl.textContent = "Saving...";
   try {
-    const result = await api(`/attendance/schoolClass/${classId}`, {
+    const result = await api(`/attendance/class/${classId}`, {
       method: "POST",
       body: JSON.stringify({ date, records }),
     });
@@ -680,8 +695,8 @@ async function loadAttendanceInsights(classId) {
 
   try {
     const [{ history }, { rates }] = await Promise.all([
-      api(`/attendance/schoolClass/${classId}/history?limit=12`),
-      api(`/attendance/schoolClass/${classId}/rates?limit=12&threshold=50`),
+      api(`/attendance/class/${classId}/history?limit=12`),
+      api(`/attendance/class/${classId}/rates?limit=12&threshold=50`),
     ]);
 
     if (history.length === 0) {
@@ -732,7 +747,7 @@ window.generateLeaderInvite = async function (classId, className, teacherPhone) 
 
   try {
     const result = await api(`/classes/${classId}/invite`, { method: "POST" });
-    const inviteUrl = `${window.location.origin}/teacher-signup.html?school=${encodeURIComponent(currentChurchId)}&token=${encodeURIComponent(result.token)}`;
+    const inviteUrl = `${window.location.origin}/teacher-signup.html?school=${encodeURIComponent(currentSchoolId)}&token=${encodeURIComponent(result.token)}`;
 
     document.getElementById("teacherInviteHint").textContent =
       `One-time link for ${className}'s teacher to set up their own account. Expires in 7 days, works once.`;
@@ -754,7 +769,7 @@ window.generateLeaderInvite = async function (classId, className, teacherPhone) 
   }
 };
 
-window.copyLeaderInviteLink = function () {
+window.copyTeacherInviteLink = function () {
   const input = document.getElementById("teacherInviteLink");
   input.select();
   navigator.clipboard.writeText(input.value).then(() => {
@@ -763,6 +778,209 @@ window.copyLeaderInviteLink = function () {
     document.getElementById("teacherInviteStatus").textContent = "Copy failed - select and copy manually.";
   });
 };
+
+// ---------- Lesson Plans ----------
+
+let lessonPlansCache = [];
+let editingLessonPlanId = null;
+
+// Textareas hold one item per line; the backend stores these as arrays.
+function linesToArray(text) {
+  return (text || "").split("\n").map((s) => s.trim()).filter(Boolean);
+}
+function arrayToLines(arr) {
+  return (arr || []).join("\n");
+}
+
+async function loadMyLessonPlans() {
+  const { lessonPlans } = await api("/lesson-plans");
+  lessonPlansCache = lessonPlans;
+  renderMyLessonPlansTable(lessonPlansCache);
+}
+
+function renderMyLessonPlansTable(list) {
+  const tbody = document.getElementById("myLessonPlansTable");
+  tbody.innerHTML = "";
+
+  if (!list.length) {
+    tbody.innerHTML = "<tr><td colspan='5'>No lesson plans yet.</td></tr>";
+    return;
+  }
+
+  list.forEach((lp) => {
+    const tr = document.createElement("tr");
+    const termWeek = escapeHtml(lp.term || "") + (lp.week ? " / Wk " + escapeHtml(String(lp.week)) : "");
+    const canEdit = lp.status === "draft";
+    tr.innerHTML = `
+      <td>${termWeek}</td>
+      <td>${escapeHtml(lp.subject || "")}</td>
+      <td>${escapeHtml(lp.strand || "—")}</td>
+      <td>${escapeHtml(lp.status)}</td>
+      <td>
+        ${canEdit ? `<button class="edit-lesson-plan-btn" data-id="${lp.id}">Edit</button>` : ""}
+        ${canEdit ? `<button class="submit-lesson-plan-btn" data-id="${lp.id}">Submit</button>` : ""}
+        ${canEdit ? `<button class="delete-lesson-plan-btn" data-id="${lp.id}" style="background:#a33;">Delete</button>` : ""}
+      </td>`;
+    tbody.appendChild(tr);
+  });
+
+  tbody.querySelectorAll(".edit-lesson-plan-btn").forEach((btn) => {
+    btn.addEventListener("click", () => startEditLessonPlan(btn.dataset.id));
+  });
+  tbody.querySelectorAll(".submit-lesson-plan-btn").forEach((btn) => {
+    btn.addEventListener("click", () => submitLessonPlan(btn.dataset.id));
+  });
+  tbody.querySelectorAll(".delete-lesson-plan-btn").forEach((btn) => {
+    btn.addEventListener("click", () => deleteLessonPlan(btn.dataset.id));
+  });
+}
+
+function startEditLessonPlan(id) {
+  const lp = lessonPlansCache.find((p) => p.id === id);
+  if (!lp) return;
+
+  editingLessonPlanId = id;
+  document.getElementById("lpTerm").value = lp.term || "";
+  document.getElementById("lpWeek").value = lp.week || "";
+  document.getElementById("lpDate").value = lp.date || "";
+  document.getElementById("lpSubject").value = lp.subject || "";
+  document.getElementById("lpStrand").value = lp.strand || "";
+  document.getElementById("lpSubStrand").value = lp.subStrand || "";
+  document.getElementById("lpObjectives").value = arrayToLines(lp.objectives);
+  document.getElementById("lpActivities").value = arrayToLines(lp.lessonActivities);
+  document.getElementById("lpResources").value = arrayToLines(lp.resources);
+  document.getElementById("lpAssessment").value = lp.assessmentMethod || "";
+
+  document.getElementById("lessonPlanFormTitle").textContent = "Edit Lesson Plan";
+  document.getElementById("lpCancelBtn").style.display = "inline-block";
+  document.getElementById("addLessonPlanCard").scrollIntoView({ behavior: "smooth" });
+}
+
+window.cancelEditLessonPlan = function () {
+  editingLessonPlanId = null;
+  ["lpTerm", "lpWeek", "lpDate", "lpSubject", "lpStrand", "lpSubStrand",
+   "lpObjectives", "lpActivities", "lpResources", "lpAssessment"].forEach((id) => {
+    document.getElementById(id).value = "";
+  });
+  document.getElementById("lessonPlanFormTitle").textContent = "New Lesson Plan";
+  document.getElementById("lpCancelBtn").style.display = "none";
+};
+
+window.saveLessonPlan = async function () {
+  const statusEl = document.getElementById("lessonPlanStatus");
+  statusEl.textContent = "";
+
+  const term = document.getElementById("lpTerm").value.trim();
+  const subject = document.getElementById("lpSubject").value.trim();
+  if (!term || !subject) {
+    statusEl.textContent = "Term and subject are required.";
+    return;
+  }
+
+  const payload = {
+    classId: currentClassId,
+    term,
+    week: document.getElementById("lpWeek").value.trim() || null,
+    date: document.getElementById("lpDate").value || null,
+    subject,
+    strand: document.getElementById("lpStrand").value.trim(),
+    subStrand: document.getElementById("lpSubStrand").value.trim(),
+    objectives: linesToArray(document.getElementById("lpObjectives").value),
+    lessonActivities: linesToArray(document.getElementById("lpActivities").value),
+    resources: linesToArray(document.getElementById("lpResources").value),
+    assessmentMethod: document.getElementById("lpAssessment").value.trim(),
+  };
+
+  try {
+    if (editingLessonPlanId) {
+      await api(`/lesson-plans/${editingLessonPlanId}`, { method: "PUT", body: JSON.stringify(payload) });
+    } else {
+      await api("/lesson-plans", { method: "POST", body: JSON.stringify(payload) });
+    }
+    window.cancelEditLessonPlan();
+    await loadMyLessonPlans();
+    statusEl.textContent = "Saved.";
+  } catch (err) {
+    statusEl.textContent = "Couldn't save lesson plan: " + err.message;
+  }
+};
+
+async function submitLessonPlan(id) {
+  const statusEl = document.getElementById("lessonPlanStatus");
+  try {
+    await api(`/lesson-plans/${id}/submit`, { method: "POST" });
+    await loadMyLessonPlans();
+    statusEl.textContent = "Submitted for approval.";
+  } catch (err) {
+    statusEl.textContent = "Couldn't submit: " + err.message;
+  }
+}
+
+async function deleteLessonPlan(id) {
+  if (!confirm("Delete this draft lesson plan?")) return;
+  try {
+    await api(`/lesson-plans/${id}`, { method: "DELETE" });
+    await loadMyLessonPlans();
+  } catch (err) {
+    document.getElementById("lessonPlanStatus").textContent = "Couldn't delete: " + err.message;
+  }
+}
+
+// ---------- Lesson Plan Review (admin) ----------
+
+window.loadLessonPlanReviewQueue = async function () {
+  const status = document.getElementById("lpReviewFilter").value;
+  const query = status ? `?status=${encodeURIComponent(status)}` : "";
+  const { lessonPlans } = await api(`/lesson-plans${query}`);
+  renderLessonPlanReviewTable(lessonPlans);
+};
+
+function renderLessonPlanReviewTable(list) {
+  const tbody = document.getElementById("lessonPlanReviewTable");
+  tbody.innerHTML = "";
+
+  if (!list.length) {
+    tbody.innerHTML = "<tr><td colspan='6'>Nothing here.</td></tr>";
+    return;
+  }
+
+  list.forEach((lp) => {
+    const cls = classesCache.find((c) => c.id === lp.classId);
+    const termWeek = escapeHtml(lp.term || "") + (lp.week ? " / Wk " + escapeHtml(String(lp.week)) : "");
+    const tr = document.createElement("tr");
+    tr.innerHTML = `
+      <td>${escapeHtml(cls ? cls.name : lp.classId)}</td>
+      <td>${termWeek}</td>
+      <td>${escapeHtml(lp.subject || "")}</td>
+      <td>${escapeHtml(lp.teacherId)}</td>
+      <td>${escapeHtml(lp.status)}</td>
+      <td>
+        ${lp.status === "submitted" ? `<button class="approve-lesson-plan-btn" data-id="${lp.id}">Approve</button>` : ""}
+        ${lp.status === "submitted" || lp.status === "approved" ? `<button class="reject-lesson-plan-btn" data-id="${lp.id}" style="background:#888;">Back to Draft</button>` : ""}
+      </td>`;
+    tbody.appendChild(tr);
+  });
+
+  tbody.querySelectorAll(".approve-lesson-plan-btn").forEach((btn) => {
+    btn.addEventListener("click", () => reviewLessonPlan(btn.dataset.id, "approved"));
+  });
+  tbody.querySelectorAll(".reject-lesson-plan-btn").forEach((btn) => {
+    btn.addEventListener("click", () => reviewLessonPlan(btn.dataset.id, "draft"));
+  });
+}
+
+async function reviewLessonPlan(id, newStatus) {
+  let reviewNote = "";
+  if (newStatus === "draft") {
+    reviewNote = prompt("Optional note for the teacher on why this was sent back:") || "";
+  }
+  try {
+    await api(`/lesson-plans/${id}`, { method: "PUT", body: JSON.stringify({ status: newStatus, reviewNote }) });
+    await window.loadLessonPlanReviewQueue();
+  } catch (err) {
+    alert("Couldn't update lesson plan: " + err.message);
+  }
+}
 
 // ---------- Utils ----------
 
