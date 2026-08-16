@@ -1,0 +1,786 @@
+// frontend/js/admin.js
+import { auth, API_BASE } from "./firebase-config.js";
+import {
+  signInWithEmailAndPassword,
+  signOut,
+  onAuthStateChanged,
+} from "https://www.gstatic.com/firebasejs/10.12.0/firebase-auth.js";
+
+let currentToken = null;
+let classesCache = [];
+let parentsCache = [];
+let editingClassId = null;
+let currentRole = "admin";
+let currentCellId = null;
+let currentChurchId = null;
+
+// ---------- Auth ----------
+
+window.login = async function () {
+  const email = document.getElementById("loginEmail").value.trim();
+  const password = document.getElementById("loginPassword").value;
+  const errorEl = document.getElementById("loginError");
+  errorEl.textContent = "";
+
+  try {
+    await signInWithEmailAndPassword(auth, email, password);
+  } catch (err) {
+    errorEl.textContent = "Login failed: " + err.message;
+  }
+};
+
+window.logout = async function () {
+  await signOut(auth);
+};
+
+onAuthStateChanged(auth, async (user) => {
+  if (user) {
+    currentToken = await user.getIdToken();
+    document.getElementById("loginView").classList.add("hidden");
+    document.getElementById("appView").classList.remove("hidden");
+
+    const claims = decodeJwtPayload(currentToken);
+    currentRole = claims?.role || "admin"; // pre-role accounts default to admin
+    currentCellId = claims?.classId || null;
+    currentChurchId = claims?.schoolId || null;
+
+    if (claims?.schoolId) {
+      const portalUrl = `${window.location.origin}/portal.html?school=${encodeURIComponent(claims.schoolId)}`;
+      document.getElementById("portalLinkDisplay").value = portalUrl;
+    }
+
+    applyRoleUI();
+    await loadClasses();
+    await loadMembers();
+
+    // Now that parentsCache is populated, actually render the roll call
+    // for teachers (dropdown was pre-selected in loadClasses above).
+    if (currentRole === "teacher" && document.getElementById("attendanceClass").value) {
+      await window.loadAttendanceForm();
+    }
+  } else {
+    currentToken = null;
+    document.getElementById("loginView").classList.remove("hidden");
+    document.getElementById("appView").classList.add("hidden");
+  }
+});
+
+// Shows/hides write-action cards based on role. Admin = full access everywhere.
+// Teacher = can create/edit within their own class, but can't create new classes.
+// Level 2 click-to-chat buttons (Message, Send Reminder, Send Check-in) are
+// left visible for every role since they're plain wa.me links with no
+// backend write call - harmless, and useful for admin too.
+function applyRoleUI() {
+  const badge = document.getElementById("roleBadge");
+  if (currentRole === "teacher") {
+    badge.textContent = "Role: Class Teacher (your class only)";
+  } else {
+    badge.textContent = "Role: Admin (full access)";
+  }
+
+  const addClassCard = document.getElementById("addClassCard");
+  const addParentCard = document.getElementById("addParentCard");
+  const bulkAddParentCard = document.getElementById("bulkAddParentCard");
+  const saveAttendanceBtn = document.getElementById("saveAttendanceBtn");
+
+  if (currentRole === "teacher") {
+    addClassCard.style.display = "none"; // teachers can edit their own class, not create new ones
+    addParentCard.style.display = "block";
+    bulkAddParentCard.style.display = "block";
+    saveAttendanceBtn.style.display = "inline-block";
+    setBroadcastCardDisabled(true); // visible, but greyed out - admin-only action
+  } else {
+    // admin gets full access
+    addClassCard.style.display = "block";
+    addParentCard.style.display = "block";
+    bulkAddParentCard.style.display = "block";
+    saveAttendanceBtn.style.display = "inline-block";
+    setBroadcastCardDisabled(false);
+  }
+}
+
+// Level 3 (automated sends) is admin-only. Teachers still see the
+// card - so they know the capability exists - but can't use it: inputs
+// disabled, card visually dimmed, and a note explains why.
+function setBroadcastCardDisabled(disabled) {
+  const broadcastCard = document.getElementById("broadcastCard");
+  broadcastCard.style.display = "block";
+  broadcastCard.style.opacity = disabled ? "0.55" : "1";
+
+  const classSelect = document.getElementById("broadcastClass");
+  const messageBox = document.getElementById("broadcastMessage");
+  const sendBtn = document.getElementById("broadcastSendBtn");
+  if (classSelect) classSelect.disabled = disabled;
+  if (messageBox) messageBox.disabled = disabled;
+  if (sendBtn) sendBtn.disabled = disabled;
+
+  const noteEl = document.getElementById("broadcastLockedNote");
+  if (noteEl) noteEl.style.display = disabled ? "block" : "none";
+}
+
+window.copyPortalLink = function () {
+  const input = document.getElementById("portalLinkDisplay");
+  input.select();
+  navigator.clipboard.writeText(input.value).then(() => {
+    document.getElementById("portalLinkStatus").textContent = "Copied!";
+  }).catch(() => {
+    document.getElementById("portalLinkStatus").textContent = "Copy failed - select and copy manually.";
+  });
+};
+
+function decodeJwtPayload(token) {
+  try {
+    const payload = token.split(".")[1];
+    const decoded = atob(payload.replace(/-/g, "+").replace(/_/g, "/"));
+    return JSON.parse(decoded);
+  } catch {
+    return null;
+  }
+}
+
+// ---------- API helper ----------
+
+async function api(path, options = {}) {
+  const token = auth.currentUser ? await auth.currentUser.getIdToken() : currentToken;
+
+  let res;
+  try {
+    res = await fetch(`${API_BASE}${path}`, {
+      ...options,
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${token}`,
+        ...(options.headers || {}),
+      },
+    });
+  } catch (networkErr) {
+    // The backend on Render's free tier sleeps after inactivity and can
+    // take 30-60s to wake up on the first request - this usually shows up
+    // as a raw "Failed to fetch" rather than a proper HTTP error.
+    throw new Error("Couldn't reach the server. If it's been idle a while it may be waking up - wait a few seconds and try again.");
+  }
+
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({}));
+    throw new Error(body.error || `Request failed (${res.status})`);
+  }
+  return res.json();
+}
+
+// ---------- WhatsApp link helpers (Level 1 & 2 — no backend call, no API cost) ----------
+
+// Normalizes Kenyan numbers to international digits-only, e.g. 0722914407 -> 254722914407
+function normalizePhoneForWa(phone) {
+  const digits = (phone || "").replace(/\D/g, "");
+  if (digits.startsWith("0")) return "254" + digits.slice(1);
+  if (digits.startsWith("254")) return digits;
+  return digits;
+}
+
+// Level 2: click-to-chat link, optionally with a prefilled message
+function buildClickToChatLink(phone, message) {
+  const number = normalizePhoneForWa(phone);
+  const base = `https://wa.me/${number}`;
+  return message ? `${base}?text=${encodeURIComponent(message)}` : base;
+}
+
+// ---------- Parents ----------
+
+async function loadMembers() {
+  const { parents } = await api("/parents");
+  parentsCache = parents;
+  renderParentsTable(parentsCache);
+}
+
+// Groups the given parent list by class (alphabetical by class name, parents
+// with no class last), shows a header row per group with its own count, and
+// a running total at the top of the card.
+function renderParentsTable(list) {
+  const tbody = document.getElementById("parentsTable");
+  tbody.innerHTML = "";
+
+  document.getElementById("parentTotalCount").textContent =
+    "Total parents: " + list.length;
+
+  if (list.length === 0) {
+    const tr = document.createElement("tr");
+    tr.innerHTML = "<td colspan='4' style='color:var(--ink-soft);'>No parents match.</td>";
+    tbody.appendChild(tr);
+    return;
+  }
+
+  const groups = {}; // classId (or "" for unassigned) -> parents[]
+  list.forEach((m) => {
+    const key = m.classId || "";
+    if (!groups[key]) groups[key] = [];
+    groups[key].push(m);
+  });
+
+  const groupKeys = Object.keys(groups).sort((a, b) => {
+    if (a === "") return 1; // unassigned always last
+    if (b === "") return -1;
+    const nameA = classesCache.find((c) => c.id === a)?.name || "";
+    const nameB = classesCache.find((c) => c.id === b)?.name || "";
+    return nameA.localeCompare(nameB);
+  });
+
+  groupKeys.forEach((key) => {
+    const schoolClass = classesCache.find((c) => c.id === key);
+    const groupName = schoolClass ? schoolClass.name : "No Class Assigned";
+    const groupMembers = groups[key].sort((a, b) => a.name.localeCompare(b.name));
+
+    const headerTr = document.createElement("tr");
+    headerTr.className = "class-group-header";
+    headerTr.innerHTML =
+      "<td colspan='4'>" + escapeHtml(groupName) + " (" + groupMembers.length + ")</td>";
+    tbody.appendChild(headerTr);
+
+    groupMembers.forEach((m) => {
+      const welcomeMsg = schoolClass
+        ? "Welcome to " + schoolClass.name + "! Glad to have you with us."
+        : "Hi " + m.name + ", welcome!";
+      const waLink = buildClickToChatLink(m.whatsappNumber || m.phone, welcomeMsg);
+
+      const tr = document.createElement("tr");
+      tr.innerHTML = `
+        <td>${escapeHtml(m.name)}</td>
+        <td>${escapeHtml(m.phone)}</td>
+        <td>${escapeHtml(groupName)}</td>
+        <td class="actions">
+          <a href="${waLink}" target="_blank" rel="noopener"><button class="wa-btn" type="button">Message</button></a>
+          <button class="del" data-id="${m.id}">Delete</button>
+        </td>`;
+      tr.querySelector(".del").addEventListener("click", () => deleteMember(m.id));
+      tbody.appendChild(tr);
+    });
+  });
+}
+
+window.filterMembers = function () {
+  const classId = document.getElementById("parentSearchClass").value;
+  const phoneQuery = document.getElementById("parentSearchPhone").value.replace(/\D/g, "");
+
+  let filtered = parentsCache;
+  if (classId) {
+    filtered = filtered.filter((m) => m.classId === classId);
+  }
+  if (phoneQuery) {
+    filtered = filtered.filter((m) => (m.phone || "").replace(/\D/g, "").includes(phoneQuery));
+  }
+  renderParentsTable(filtered);
+};
+
+window.clearMemberSearch = function () {
+  document.getElementById("parentSearchClass").value = "";
+  document.getElementById("parentSearchPhone").value = "";
+  renderParentsTable(parentsCache);
+};
+
+window.addMember = async function () {
+  const name = document.getElementById("parentName").value.trim();
+  const phone = document.getElementById("parentPhone").value.trim();
+  const whatsappNumber = document.getElementById("parentWhatsapp").value.trim();
+  const classId = document.getElementById("parentClass").value || null;
+
+  if (!name || !phone) {
+    alert("Name and phone are required");
+    return;
+  }
+
+  try {
+    await api("/parents", {
+      method: "POST",
+      body: JSON.stringify({ name, phone, whatsappNumber: whatsappNumber || undefined, classId }),
+    });
+  } catch (err) {
+    alert("Couldn't add parent: " + err.message);
+    return;
+  }
+
+  document.getElementById("parentName").value = "";
+  document.getElementById("parentPhone").value = "";
+  document.getElementById("parentWhatsapp").value = "";
+  await loadMembers();
+};
+
+// Parses one parent per line: "Name, Phone" or just "Phone" alone (name
+// then defaults to the phone number itself - rename later if needed by
+// deleting and re-adding, since there's no bulk-edit yet).
+function parseBulkMemberText(text) {
+  const lines = text.split("\n").map((l) => l.trim()).filter((l) => l.length > 0);
+
+  return lines.map((line) => {
+    const commaIndex = line.indexOf(",");
+    if (commaIndex === -1) {
+      return { name: line, phone: line };
+    }
+    const name = line.slice(0, commaIndex).trim();
+    const phone = line.slice(commaIndex + 1).trim();
+    return { name: name || phone, phone: phone };
+  }).filter((m) => m.phone);
+}
+
+window.bulkAddMembers = async function () {
+  const classId = document.getElementById("bulkParentClass").value || null;
+  const text = document.getElementById("bulkMemberText").value;
+  const statusEl = document.getElementById("bulkAddStatus");
+
+  const parents = parseBulkMemberText(text);
+
+  if (parents.length === 0) {
+    statusEl.textContent = "Paste at least one line first.";
+    return;
+  }
+
+  statusEl.textContent = "Adding " + parents.length + " parent(s)...";
+
+  try {
+    const result = await api("/parents/bulk", {
+      method: "POST",
+      body: JSON.stringify({ classId: classId, parents: parents }),
+    });
+    statusEl.textContent = "Added " + result.created + " parent(s)" +
+      (result.skipped ? ", skipped " + result.skipped + " invalid line(s)" : "") + ".";
+    document.getElementById("bulkMemberText").value = "";
+    await loadMembers();
+  } catch (err) {
+    statusEl.textContent = "Error: " + err.message;
+  }
+};
+
+async function deleteMember(id) {
+  if (!confirm("Delete this parent?")) return;
+  await api(`/parents/${id}`, { method: "DELETE" });
+  await loadMembers();
+}
+
+// ---------- Classes ----------
+
+async function loadClasses() {
+  const { classes } = await api("/classes");
+  classesCache = classes;
+
+  const select = document.getElementById("parentClass");
+  select.innerHTML = '<option value="">-- No Class --</option>';
+  classes.forEach((c) => {
+    const opt = document.createElement("option");
+    opt.value = c.id;
+    opt.textContent = c.name;
+    select.appendChild(opt);
+  });
+
+  const broadcastSelect = document.getElementById("broadcastClass");
+  broadcastSelect.innerHTML = '<option value="">-- Choose a Class --</option>';
+  classes.forEach((c) => {
+    const opt = document.createElement("option");
+    opt.value = c.id;
+    opt.textContent = c.name;
+    broadcastSelect.appendChild(opt);
+  });
+
+  const bulkParentSelect = document.getElementById("bulkParentClass");
+  bulkParentSelect.innerHTML = '<option value="">-- Choose a Class --</option>';
+  classes.forEach((c) => {
+    const opt = document.createElement("option");
+    opt.value = c.id;
+    opt.textContent = c.name;
+    bulkParentSelect.appendChild(opt);
+  });
+
+  const parentSearchSelect = document.getElementById("parentSearchClass");
+  parentSearchSelect.innerHTML = '<option value="">-- All classes --</option>';
+  classes.forEach((c) => {
+    const opt = document.createElement("option");
+    opt.value = c.id;
+    opt.textContent = c.name;
+    parentSearchSelect.appendChild(opt);
+  });
+
+  const attendanceSelect = document.getElementById("attendanceClass");
+  attendanceSelect.innerHTML = '<option value="">-- Choose a Class --</option>';
+  classes.forEach((c) => {
+    const opt = document.createElement("option");
+    opt.value = c.id;
+    opt.textContent = c.name;
+    attendanceSelect.appendChild(opt);
+  });
+  const dateInput = document.getElementById("attendanceDate");
+  if (!dateInput.value) dateInput.value = new Date().toISOString().slice(0, 10);
+
+  // Teachers only ever have one class (the backend already scopes GET /classes
+  // to it) - pre-select it so roll call is one less tap. The actual
+  // attendance form loads after loadMembers() too (see onAuthStateChanged),
+  // since it needs parentsCache populated first.
+  if (currentRole === "teacher" && classes.length === 1) {
+    attendanceSelect.value = classes[0].id;
+  }
+
+  const tbody = document.getElementById("classesTable");
+  tbody.innerHTML = "";
+  classes.forEach((c) => {
+    const meeting = [c.meetingDay, c.meetingTime].filter(Boolean).join(" ") || "—";
+    const groupLinkCell = c.whatsappGroupLink
+      ? `<a href="${escapeAttr(c.whatsappGroupLink)}" target="_blank" rel="noopener"><button class="wa-btn" type="button">Open Group</button></a>
+         <div style="font-size:11px;color:#888;margin-top:2px;">${formatUpdatedDate(c.whatsappGroupLinkUpdatedAt)}</div>`
+      : "—";
+
+    const inviteBtn = currentRole === "admin"
+      ? `<button class="invite-teacher-btn" data-id="${c.id}" data-name="${escapeAttr(c.name)}" data-teacher-phone="${escapeAttr(c.teacherPhone || "")}" type="button">Invite Teacher</button>`
+      : "";
+
+    const tr = document.createElement("tr");
+    tr.innerHTML = `
+      <td>${escapeHtml(c.name)}</td>
+      <td>${escapeHtml(c.teacherName || "—")}</td>
+      <td>${escapeHtml(meeting)}</td>
+      <td>${groupLinkCell}</td>
+      <td class="actions">
+        <button class="edit-class-btn" data-id="${c.id}" type="button">Edit</button>
+        ${inviteBtn}
+      </td>`;
+    tr.querySelector(".edit-class-btn").addEventListener("click", () => startEditClass(c.id));
+    const inviteBtnEl = tr.querySelector(".invite-teacher-btn");
+    if (inviteBtnEl) {
+      inviteBtnEl.addEventListener("click", () =>
+        generateLeaderInvite(inviteBtnEl.dataset.id, inviteBtnEl.dataset.name, inviteBtnEl.dataset.teacherPhone)
+      );
+    }
+    tbody.appendChild(tr);
+  });
+}
+
+window.startEditClass = function (classId) {
+  const schoolClass = classesCache.find((c) => c.id === classId);
+  if (!schoolClass) return;
+
+  editingClassId = classId;
+  document.getElementById("className").value = schoolClass.name || "";
+  document.getElementById("classTeacher").value = schoolClass.teacherName || "";
+  document.getElementById("classTeacherPhone").value = schoolClass.teacherPhone || "";
+  document.getElementById("classDay").value = schoolClass.meetingDay || "";
+  document.getElementById("classTime").value = schoolClass.meetingTime || "";
+  document.getElementById("classGroupLink").value = schoolClass.whatsappGroupLink || "";
+
+  document.getElementById("classFormTitle").textContent = `Edit Class: ${schoolClass.name}`;
+  document.getElementById("classSubmitBtn").textContent = "Update Class";
+  document.getElementById("classCancelBtn").style.display = "inline-block";
+
+  document.getElementById("className").scrollIntoView({ behavior: "smooth", block: "center" });
+};
+
+window.cancelEditClass = function () {
+  editingClassId = null;
+  document.getElementById("className").value = "";
+  document.getElementById("classTeacher").value = "";
+  document.getElementById("classTeacherPhone").value = "";
+  document.getElementById("classDay").value = "";
+  document.getElementById("classTime").value = "";
+  document.getElementById("classGroupLink").value = "";
+
+  document.getElementById("classFormTitle").textContent = "Add Class";
+  document.getElementById("classSubmitBtn").textContent = "Add Class";
+  document.getElementById("classCancelBtn").style.display = "none";
+};
+
+window.addClass = async function () {
+  const name = document.getElementById("className").value.trim();
+  const teacherName = document.getElementById("classTeacher").value.trim();
+  const teacherPhone = document.getElementById("classTeacherPhone").value.trim();
+  const meetingDay = document.getElementById("classDay").value.trim();
+  const meetingTime = document.getElementById("classTime").value.trim();
+  const whatsappGroupLink = document.getElementById("classGroupLink").value.trim();
+
+  if (!name) {
+    alert("Class name is required");
+    return;
+  }
+
+  const payload = { name, teacherName, teacherPhone, meetingDay, meetingTime, whatsappGroupLink };
+
+  try {
+    if (editingClassId) {
+      await api(`/classes/${editingClassId}`, {
+        method: "PUT",
+        body: JSON.stringify(payload),
+      });
+    } else {
+      await api("/classes", {
+        method: "POST",
+        body: JSON.stringify(payload),
+      });
+    }
+  } catch (err) {
+    alert("Couldn't save class: " + err.message);
+    return;
+  }
+
+  cancelEditClass(); // resets form + editingClassId back to add-mode
+  await loadClasses();
+  await loadMembers();
+};
+
+// ---------- Broadcast (Level 3 — automated via WhatsApp Business API) ----------
+
+window.sendBroadcast = async function () {
+  const classId = document.getElementById("broadcastClass").value;
+  const message = document.getElementById("broadcastMessage").value.trim();
+  const statusEl = document.getElementById("broadcastStatus");
+
+  if (!classId) {
+    alert("Choose a class first");
+    return;
+  }
+  if (!message) {
+    alert("Enter a message");
+    return;
+  }
+
+  statusEl.textContent = "Sending...";
+  try {
+    const result = await api(`/broadcast/schoolClass/${classId}`, {
+      method: "POST",
+      body: JSON.stringify({ message }),
+    });
+    statusEl.textContent = `Sent to ${result.sent} parent(s)${result.failed ? `, ${result.failed} failed` : ""}.`;
+    document.getElementById("broadcastMessage").value = "";
+  } catch (err) {
+    statusEl.textContent = "Error: " + err.message;
+  }
+};
+
+// ---------- Attendance ----------
+
+window.loadAttendanceForm = async function () {
+  const classId = document.getElementById("attendanceClass").value;
+  const listEl = document.getElementById("attendanceList");
+  const statusEl = document.getElementById("attendanceStatus");
+  statusEl.textContent = "";
+  listEl.innerHTML = "";
+  document.getElementById("absenteesCard").style.display = "none";
+  document.getElementById("insightsCard").style.display = "none";
+
+  if (!classId) return;
+
+  const classParents = parentsCache.filter((m) => m.classId === classId);
+  if (classParents.length === 0) {
+    listEl.innerHTML = "<p style='font-size:13px;color:#888;'>No parents in this class yet.</p>";
+    return;
+  }
+
+  const date = document.getElementById("attendanceDate").value || new Date().toISOString().slice(0, 10);
+  let existing = { records: {} };
+  try {
+    existing = await api(`/attendance/schoolClass/${classId}?date=${date}`);
+  } catch (err) {
+    // no existing record for this date is fine
+  }
+
+  classParents.forEach((m) => {
+    const row = document.createElement("div");
+    row.className = "attend-row";
+    const checked = existing.records && existing.records[m.id] ? "checked" : "";
+    row.innerHTML = `<label style="display:flex;align-items:center;width:100%;">
+      <input type="checkbox" data-parent-id="${m.id}" ${checked}>
+      ${escapeHtml(m.name)}
+    </label>`;
+    listEl.appendChild(row);
+  });
+
+  // If a record already exists for this date, show absentees right away too.
+  if (existing.records && Object.keys(existing.records).length > 0) {
+    renderAbsentees(classId, classParents, existing.records);
+  }
+
+  await loadAttendanceInsights(classId);
+};
+
+document.getElementById("attendanceDate").addEventListener("change", () => {
+  if (document.getElementById("attendanceClass").value) window.loadAttendanceForm();
+});
+
+document.getElementById("parentSearchPhone").addEventListener("keydown", (e) => {
+  if (e.key === "Enter") window.filterMembers();
+});
+
+window.saveAttendance = async function () {
+  const classId = document.getElementById("attendanceClass").value;
+  const date = document.getElementById("attendanceDate").value;
+  const statusEl = document.getElementById("attendanceStatus");
+
+  if (!classId) {
+    alert("Choose a class first");
+    return;
+  }
+
+  const checkboxes = document.querySelectorAll("#attendanceList input[type='checkbox']");
+  const records = Array.from(checkboxes).map((cb) => ({
+    parentId: cb.dataset.parentId,
+    present: cb.checked,
+  }));
+
+  if (records.length === 0) {
+    statusEl.textContent = "No parents to record.";
+    return;
+  }
+
+  statusEl.textContent = "Saving...";
+  try {
+    const result = await api(`/attendance/schoolClass/${classId}`, {
+      method: "POST",
+      body: JSON.stringify({ date, records }),
+    });
+    statusEl.textContent = `Saved: ${result.presentCount}/${result.totalMembers} present on ${result.date}.`;
+
+    const recordsMap = {};
+    records.forEach((r) => { recordsMap[r.parentId] = r.present; });
+    const classParents = parentsCache.filter((m) => m.classId === classId);
+    renderAbsentees(classId, classParents, recordsMap);
+  } catch (err) {
+    statusEl.textContent = "Error: " + err.message;
+  }
+};
+
+// Admin/teacher dashboard feature: one row per absentee, each with its own
+// "Send Reminder" click-to-chat button (Level 2 — teacher still taps Send).
+function renderAbsentees(classId, classParents, recordsMap) {
+  const card = document.getElementById("absenteesCard");
+  const listEl = document.getElementById("absenteesList");
+  const schoolClass = classesCache.find((c) => c.id === classId);
+
+  const absentees = classParents.filter((m) => recordsMap[m.id] === false);
+
+  if (absentees.length === 0) {
+    card.style.display = "block";
+    listEl.innerHTML = "<p style='font-size:13px;color:#888;'>Nobody absent — full house.</p>";
+    return;
+  }
+
+  card.style.display = "block";
+  listEl.innerHTML = "";
+
+  const reminderText = `Good evening. We missed you at today's ${schoolClass?.name || "class"} meeting. We hope you're doing well and look forward to seeing you next week. Please let us know if we can pray for you.`;
+
+  absentees.forEach((m) => {
+    const waLink = buildClickToChatLink(m.whatsappNumber || m.phone, reminderText);
+    const row = document.createElement("div");
+    row.className = "absent-row";
+    row.innerHTML = `
+      <span>${escapeHtml(m.name)}</span>
+      <a href="${waLink}" target="_blank" rel="noopener"><button class="wa-btn" type="button">Send WhatsApp Reminder</button></a>`;
+    listEl.appendChild(row);
+  });
+}
+
+// Attendance Insights: recent meeting history + parents needing a check-in
+// (flagged by the backend when their rate is below threshold).
+async function loadAttendanceInsights(classId) {
+  const card = document.getElementById("insightsCard");
+  const historyTbody = document.getElementById("historyTable");
+  const lowListEl = document.getElementById("lowAttendanceList");
+
+  try {
+    const [{ history }, { rates }] = await Promise.all([
+      api(`/attendance/schoolClass/${classId}/history?limit=12`),
+      api(`/attendance/schoolClass/${classId}/rates?limit=12&threshold=50`),
+    ]);
+
+    if (history.length === 0) {
+      card.style.display = "none";
+      return;
+    }
+    card.style.display = "block";
+
+    historyTbody.innerHTML = "";
+    history.forEach((h) => {
+      const tr = document.createElement("tr");
+      tr.innerHTML = `<td>${escapeHtml(h.date)}</td><td>${h.presentCount}/${h.totalMembers}</td>`;
+      historyTbody.appendChild(tr);
+    });
+
+    const flagged = rates.filter((r) => r.lowAttendance);
+    lowListEl.innerHTML = "";
+
+    if (flagged.length === 0) {
+      lowListEl.innerHTML = "<p style='font-size:13px;color:#888;'>No one flagged — attendance looks healthy.</p>";
+      return;
+    }
+
+    const schoolClass = classesCache.find((c) => c.id === classId);
+    const checkinText = `Hi, we've noticed you've missed a few ${schoolClass?.name || "class"} meetings lately. We hope you're doing well — please let us know if we can pray for you or support you in any way.`;
+
+    flagged.forEach((r) => {
+      const waLink = buildClickToChatLink(r.whatsappNumber || r.phone, checkinText);
+      const row = document.createElement("div");
+      row.className = "absent-row";
+      row.innerHTML = `
+        <span>${escapeHtml(r.name)} (${r.attended}/${r.total}, ${r.rate}%)</span>
+        <a href="${waLink}" target="_blank" rel="noopener"><button class="wa-btn" type="button">Send Check-in</button></a>`;
+      lowListEl.appendChild(row);
+    });
+  } catch (err) {
+    card.style.display = "none";
+    console.error("Attendance insights failed:", err.message);
+  }
+}
+
+// ---------- Teacher self-service invites ----------
+
+window.generateLeaderInvite = async function (classId, className, teacherPhone) {
+  const statusEl = document.getElementById("teacherInviteStatus");
+  statusEl.textContent = "Generating...";
+  document.getElementById("teacherInviteCard").style.display = "block";
+
+  try {
+    const result = await api(`/classes/${classId}/invite`, { method: "POST" });
+    const inviteUrl = `${window.location.origin}/teacher-signup.html?school=${encodeURIComponent(currentChurchId)}&token=${encodeURIComponent(result.token)}`;
+
+    document.getElementById("teacherInviteHint").textContent =
+      `One-time link for ${className}'s teacher to set up their own account. Expires in 7 days, works once.`;
+    document.getElementById("teacherInviteLink").value = inviteUrl;
+
+    const waLinkEl = document.getElementById("teacherInviteWaLink");
+    if (teacherPhone) {
+      const message = `Hi! Please use this link to set up your Elimu Smart teacher login for ${className}: ${inviteUrl}`;
+      waLinkEl.href = buildClickToChatLink(teacherPhone, message);
+      waLinkEl.style.display = "inline-block";
+    } else {
+      waLinkEl.style.display = "none";
+    }
+
+    statusEl.textContent = "";
+    document.getElementById("teacherInviteCard").scrollIntoView({ behavior: "smooth", block: "center" });
+  } catch (err) {
+    statusEl.textContent = "Error: " + err.message;
+  }
+};
+
+window.copyLeaderInviteLink = function () {
+  const input = document.getElementById("teacherInviteLink");
+  input.select();
+  navigator.clipboard.writeText(input.value).then(() => {
+    document.getElementById("teacherInviteStatus").textContent = "Copied!";
+  }).catch(() => {
+    document.getElementById("teacherInviteStatus").textContent = "Copy failed - select and copy manually.";
+  });
+};
+
+// ---------- Utils ----------
+
+function formatUpdatedDate(ts) {
+  if (!ts) return "Link date unknown";
+  // Firestore Timestamps serialize over JSON as {_seconds, _nanoseconds} or {seconds, nanoseconds}
+  const seconds = ts._seconds ?? ts.seconds;
+  if (seconds === undefined) return "Link date unknown";
+  const date = new Date(seconds * 1000);
+  return "Updated " + date.toLocaleDateString(undefined, { year: "numeric", month: "short", day: "numeric" });
+}
+
+function escapeHtml(str) {
+  const div = document.createElement("div");
+  div.textContent = str ?? "";
+  return div.innerHTML;
+}
+
+function escapeAttr(str) {
+  return (str ?? "").replace(/"/g, "&quot;");
+}

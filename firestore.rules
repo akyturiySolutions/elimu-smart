@@ -1,0 +1,107 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // A user can only read/write data under the school they belong to.
+    // Requires a custom claim `schoolId` set on the Firebase Auth user
+    // (set this server-side when an admin/teacher account is created).
+    //
+    // NOTE: as with CellConnect, the backend (Express + Admin SDK) is the
+    // only thing that actually talks to Firestore for classes/parents/
+    // attendance/broadcast today - the Admin SDK bypasses these rules
+    // entirely, so this file is documentation/defense-in-depth, not the
+    // live enforcement layer for those collections. The lessonPlans/
+    // homework/curriculum collections below follow the same pattern but
+    // are written to enforce correctly if/when a client SDK path is added
+    // (e.g. a future teacher mobile app talking to Firestore directly).
+
+    match /schools/{schoolId} {
+      allow read: if request.auth != null && request.auth.token.schoolId == schoolId;
+      allow write: if false; // school doc itself managed by super-admin/backend only
+
+      match /parents/{parentId} {
+        allow read, write: if request.auth != null && request.auth.token.schoolId == schoolId;
+      }
+
+      match /classes/{classId} {
+        allow read, write: if request.auth != null && request.auth.token.schoolId == schoolId;
+
+        match /attendance/{date} {
+          allow read, write: if request.auth != null && request.auth.token.schoolId == schoolId;
+        }
+      }
+
+      match /teacherInvites/{token} {
+        // Only ever written/read via the backend's Admin SDK (bypasses these
+        // rules entirely) - included here for documentation/consistency only.
+        allow read, write: if request.auth != null && request.auth.token.schoolId == schoolId && request.auth.token.role == 'admin';
+      }
+
+      // ---- Below: designed for lessonPlans / homework / curriculum ----
+
+      function isAdmin() {
+        return request.auth != null && request.auth.token.schoolId == schoolId && request.auth.token.role == 'admin';
+      }
+
+      function isTeacher() {
+        return request.auth != null && request.auth.token.schoolId == schoolId && request.auth.token.role == 'teacher';
+      }
+
+      match /globalCurriculum/{templateId} {
+        allow read: if request.auth != null && request.auth.token.schoolId == schoolId;
+        allow write: if false; // seeded/maintained via Admin SDK, not client writes
+      }
+
+      match /curriculumOverrides/{templateId} {
+        allow read: if request.auth != null && request.auth.token.schoolId == schoolId;
+        allow write: if isAdmin();
+      }
+
+      match /lessonPlans/{lessonPlanId} {
+        allow read: if isAdmin() ||
+          (isTeacher() && resource.data.teacherId == request.auth.uid);
+
+        allow create: if isTeacher() &&
+          request.resource.data.teacherId == request.auth.uid &&
+          request.resource.data.status == 'draft';
+
+        allow update: if
+          (isTeacher() &&
+            resource.data.teacherId == request.auth.uid &&
+            resource.data.status == 'draft' &&
+            request.resource.data.status == 'draft') ||
+          (isAdmin() && request.resource.data.teacherId == resource.data.teacherId);
+
+        allow delete: if isTeacher() &&
+          resource.data.teacherId == request.auth.uid &&
+          resource.data.status == 'draft';
+        // admin "delete" is a soft-delete (update deletedAt), not a real delete
+      }
+
+      match /parentLinks/{parentUid} {
+        allow read: if isAdmin() || request.auth.uid == parentUid;
+        allow create, update, delete: if isAdmin();
+      }
+
+      match /homework/{homeworkId} {
+        allow read: if isAdmin() ||
+          (isTeacher() && resource.data.teacherId == request.auth.uid) ||
+          (request.auth != null && request.auth.token.role == 'parent' &&
+           resource.data.status == 'published' &&
+           resource.data.classId in
+             get(/databases/$(database)/documents/schools/$(schoolId)/parentLinks/$(request.auth.uid)).data.classIds);
+
+        allow create: if isTeacher() &&
+          request.resource.data.teacherId == request.auth.uid &&
+          request.resource.data.status == 'draft' &&
+          get(/databases/$(database)/documents/schools/$(schoolId)/lessonPlans/$(request.resource.data.lessonPlanId)).data.status == 'approved';
+
+        allow update: if isTeacher() && resource.data.teacherId == request.auth.uid;
+
+        allow delete: if isTeacher() &&
+          resource.data.teacherId == request.auth.uid &&
+          resource.data.status == 'draft';
+      }
+    }
+  }
+}

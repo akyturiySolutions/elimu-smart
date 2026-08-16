@@ -1,0 +1,122 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Elimu Smart — My Class</title>
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=Lora:wght@600;700&family=Karla:wght@400;500;600;700&display=swap');
+
+  :root {
+    --parchment: #FAF3E7;
+    --card: #FFFDF9;
+    --ink: #2B2118;
+    --ink-soft: #6B5D4F;
+    --indigo: #2C3E6B;
+    --indigo-dark: #1F2D4E;
+    --ochre: #C0842A;
+    --sage: #3F7350;
+    --brick-dark: #7E362C;
+    --line: #E7DAC0;
+    --wa-green: #3C8C5B;
+    --wa-green-dark: #316F48;
+  }
+
+  * { box-sizing: border-box; }
+
+  body {
+    font-family: 'Karla', sans-serif;
+    max-width: 420px;
+    margin: 40px auto;
+    padding: 20px;
+    background: var(--parchment);
+    color: var(--ink);
+    line-height: 1.5;
+  }
+
+  @media (max-width: 420px) {
+    body { margin: 0 auto; padding: 16px 14px 40px; }
+  }
+
+  h1 {
+    font-family: 'Lora', serif;
+    font-weight: 700;
+    color: var(--indigo-dark);
+    font-size: 24px;
+    margin: 0 0 6px;
+  }
+
+  .card {
+    background: var(--card);
+    border-radius: 10px;
+    padding: 22px 20px;
+    margin-bottom: 16px;
+    border: 1px solid var(--line);
+    box-shadow: 0 2px 8px rgba(43, 33, 24, 0.06);
+    position: relative;
+    overflow: hidden;
+  }
+  .card::before {
+    content: "";
+    position: absolute;
+    top: 0; left: 0; right: 0;
+    height: 4px;
+    background: repeating-linear-gradient(115deg, var(--indigo) 0 14px, var(--ochre) 14px 22px, var(--sage) 22px 30px);
+  }
+
+  input {
+    font-family: 'Karla', sans-serif;
+    padding: 12px 10px; margin: 6px 0; width: 100%;
+    box-sizing: border-box; border: 1px solid var(--line);
+    border-radius: 6px; font-size: 16px; background: #fff; color: var(--ink);
+  }
+  input:focus {
+    outline: none; border-color: var(--indigo);
+    box-shadow: 0 0 0 3px rgba(44, 62, 107, 0.12);
+  }
+
+  button {
+    font-family: 'Karla', sans-serif;
+    font-weight: 600;
+    padding: 13px 16px;
+    background: var(--indigo);
+    color: #fff; border: none; border-radius: 6px;
+    cursor: pointer; margin-top: 8px; width: 100%; font-size: 16px;
+    min-height: 46px;
+    transition: background 0.15s ease;
+  }
+  button:hover { background: var(--indigo-dark); }
+
+  .wa-btn { background: var(--wa-green); }
+  .wa-btn:hover { background: var(--wa-green-dark); }
+
+  .hidden { display: none; }
+  .error { color: var(--brick-dark); font-size: 14px; }
+  .hint { font-size: 13px; color: var(--ink-soft); }
+  .schoolClass-name { font-family: 'Lora', serif; font-size: 21px; font-weight: 700; color: var(--indigo-dark); }
+  .meta { font-size: 14px; color: var(--ink-soft); margin: 4px 0; }
+</style>
+</head>
+<body>
+
+<div id="phoneView" class="card">
+  <h1>Elimu Smart</h1>
+  <p class="hint">Enter your phone number to find your schoolClass.</p>
+  <input id="phoneInput" type="tel" placeholder="07XXXXXXXX">
+  <button id="findCellBtn">Find My Class</button>
+  <p id="phoneError" class="error"></p>
+</div>
+
+<div id="profileView" class="card hidden">
+  <p id="welcomeMsg"></p>
+  <div id="cellInfo"></div>
+</div>
+
+<div id="notFoundView" class="card hidden">
+  <p class="error">We couldn't find a parent record for this number. Please contact your school admin to be added.</p>
+</div>
+
+<script type="module" src="/js/firebase-config.js"></script>
+<script type="module" src="/js/portal.js"></script>
+</body>
+</html>
