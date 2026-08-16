@@ -15,4 +15,4 @@ export const firebaseApp = initializeApp(firebaseConfig);
 export const auth = getAuth(firebaseApp);
 
 //export const API_BASE = "http://localhost:3000/api";
-export const API_BASE = "https://https://elimu-smart-2i5q.onrender.com/api"; 
+export const API_BASE = "https://elimu-smart-2i5q.onrender.com/api"; 
