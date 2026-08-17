@@ -78,6 +78,7 @@ onAuthStateChanged(auth, async (user) => {
     applyRoleUI();
     await loadClasses();
     await loadParents();
+    populateAnalyticsClassSelect();
 
     // Now that parentsCache is populated, actually render the roll call
     // for teachers (dropdown was pre-selected in loadClasses above).
@@ -87,6 +88,8 @@ onAuthStateChanged(auth, async (user) => {
 
     if (currentRole === "teacher") {
       await loadMyLessonPlans();
+      await loadApprovedLessonPlansForHomework();
+      await loadMyHomework();
     } else {
       await loadLessonPlanReviewQueue();
     }
@@ -118,6 +121,8 @@ function applyRoleUI() {
   const addLessonPlanCard = document.getElementById("addLessonPlanCard");
   const myLessonPlansCard = document.getElementById("myLessonPlansCard");
   const lessonPlanReviewCard = document.getElementById("lessonPlanReviewCard");
+  const addHomeworkCard = document.getElementById("addHomeworkCard");
+  const myHomeworkCard = document.getElementById("myHomeworkCard");
 
   if (currentRole === "teacher") {
     addClassCard.style.display = "none"; // teachers can edit their own class, not create new ones
@@ -128,6 +133,8 @@ function applyRoleUI() {
     addLessonPlanCard.style.display = "block";
     myLessonPlansCard.style.display = "block";
     lessonPlanReviewCard.style.display = "none";
+    addHomeworkCard.style.display = "block";
+    myHomeworkCard.style.display = "block";
   } else {
     // admin gets full access
     addClassCard.style.display = "block";
@@ -138,6 +145,8 @@ function applyRoleUI() {
     addLessonPlanCard.style.display = "none"; // admin doesn't author plans, only reviews them
     myLessonPlansCard.style.display = "none";
     lessonPlanReviewCard.style.display = "block";
+    addHomeworkCard.style.display = "none"; // admin doesn't author homework either
+    myHomeworkCard.style.display = "none";
   }
 }
 
@@ -314,7 +323,7 @@ function renderParentsTable(list) {
   });
 }
 
-window.filterMembers = function () {
+window.filterParents = function () {
   const classId = document.getElementById("parentSearchClass").value;
   const phoneQuery = document.getElementById("parentSearchPhone").value.replace(/\D/g, "");
 
@@ -328,13 +337,13 @@ window.filterMembers = function () {
   renderParentsTable(filtered);
 };
 
-window.clearMemberSearch = function () {
+window.clearParentSearch = function () {
   document.getElementById("parentSearchClass").value = "";
   document.getElementById("parentSearchPhone").value = "";
   renderParentsTable(parentsCache);
 };
 
-window.addMember = async function () {
+window.addParent = async function () {
   const name = document.getElementById("parentName").value.trim();
   const phone = document.getElementById("parentPhone").value.trim();
   const whatsappNumber = document.getElementById("parentWhatsapp").value.trim();
@@ -378,7 +387,7 @@ function parseBulkMemberText(text) {
   }).filter((m) => m.phone);
 }
 
-window.bulkAddMembers = async function () {
+window.bulkAddParents = async function () {
   const classId = document.getElementById("bulkParentClass").value || null;
   const text = document.getElementById("bulkMemberText").value;
   const statusEl = document.getElementById("bulkAddStatus");
@@ -657,7 +666,7 @@ document.getElementById("attendanceDate").addEventListener("change", () => {
 });
 
 document.getElementById("parentSearchPhone").addEventListener("keydown", (e) => {
-  if (e.key === "Enter") window.filterMembers();
+  if (e.key === "Enter") window.filterParents();
 });
 
 window.saveAttendance = async function () {
@@ -1024,6 +1033,297 @@ async function reviewLessonPlan(id, newStatus) {
     alert("Couldn't update lesson plan: " + err.message);
   }
 }
+
+// ---------- Homework (AI/OCR) ----------
+
+let homeworkCache = [];
+let editingHomeworkId = null;
+let lastScannedImageBase64 = null; // kept so the published record can store the original photo
+
+function fileToBase64(file) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => {
+      // reader.result is "data:image/jpeg;base64,AAAA..." - strip the prefix
+      const base64 = reader.result.split(",")[1];
+      resolve(base64);
+    };
+    reader.onerror = reject;
+    reader.readAsDataURL(file);
+  });
+}
+
+async function loadApprovedLessonPlansForHomework() {
+  const { lessonPlans } = await api("/lesson-plans");
+  const approved = lessonPlans.filter((lp) => lp.status === "approved");
+  const select = document.getElementById("hwLessonPlan");
+  select.innerHTML = '<option value="">-- Choose an approved lesson plan --</option>';
+  approved.forEach((lp) => {
+    const opt = document.createElement("option");
+    opt.value = lp.id;
+    opt.textContent = `${lp.term || ""}${lp.week ? " Wk " + lp.week : ""} - ${lp.subject || ""}${lp.subStrand ? " (" + lp.subStrand + ")" : ""}`;
+    select.appendChild(opt);
+  });
+  if (!approved.length) {
+    select.innerHTML = '<option value="">-- No approved lesson plans yet --</option>';
+  }
+}
+
+window.scanHomeworkPhoto = async function () {
+  const statusEl = document.getElementById("hwScanStatus");
+  const fileInput = document.getElementById("hwPhotoInput");
+  const file = fileInput.files[0];
+
+  if (!file) {
+    statusEl.textContent = "Choose or take a photo first.";
+    return;
+  }
+
+  statusEl.textContent = "Scanning...";
+  try {
+    const base64 = await fileToBase64(file);
+    lastScannedImageBase64 = base64;
+    const result = await api("/homework/ocr", {
+      method: "POST",
+      body: JSON.stringify({ imageBase64: base64, mediaType: file.type || "image/jpeg" }),
+    });
+
+    document.getElementById("hwRawText").value = result.text;
+    document.getElementById("hwRawText").style.display = "block";
+    document.getElementById("hwStructureBtn").style.display = "inline-block";
+    statusEl.textContent = result.text.includes("[unclear]")
+      ? "Scanned - check the [unclear] spots below before continuing."
+      : "Scanned. Review the text, then tap \"Fill In Details From This Text\".";
+  } catch (err) {
+    // A 422 from the backend means low confidence - the message already
+    // explains it's a retake-photo situation, so just show it as-is.
+    lastScannedImageBase64 = null;
+    statusEl.textContent = err.message;
+  }
+};
+
+window.structureHomeworkNote = async function () {
+  const statusEl = document.getElementById("hwScanStatus");
+  const rawText = document.getElementById("hwRawText").value.trim();
+  if (!rawText) {
+    statusEl.textContent = "Nothing to structure yet.";
+    return;
+  }
+
+  statusEl.textContent = "Filling in details...";
+  try {
+    const structured = await api("/homework/structure", { method: "POST", body: JSON.stringify({ rawText }) });
+    document.getElementById("hwSubject").value = structured.subject;
+    document.getElementById("hwInstructions").value = structured.instructions;
+    document.getElementById("hwDueDate").value = structured.dueDate;
+    document.getElementById("hwMaterials").value = arrayToLines(structured.materials);
+    statusEl.textContent = "Details filled in below - review and edit before saving.";
+  } catch (err) {
+    statusEl.textContent = "Couldn't fill in details: " + err.message;
+  }
+};
+
+async function loadMyHomework() {
+  const { homework } = await api("/homework");
+  homeworkCache = homework;
+  renderMyHomeworkTable(homeworkCache);
+}
+
+function renderMyHomeworkTable(list) {
+  const tbody = document.getElementById("myHomeworkTable");
+  tbody.innerHTML = "";
+
+  if (!list.length) {
+    tbody.innerHTML = "<tr><td colspan='4'>No homework yet.</td></tr>";
+    return;
+  }
+
+  list.forEach((hw) => {
+    const canEdit = hw.status === "draft";
+    const tr = document.createElement("tr");
+    tr.innerHTML = `
+      <td>${escapeHtml(hw.subject || "")}</td>
+      <td>${escapeHtml(hw.dueDate || "—")}</td>
+      <td>${escapeHtml(hw.status)}</td>
+      <td>
+        ${canEdit ? `<button class="edit-homework-btn" data-id="${hw.id}">Edit</button>` : ""}
+        ${canEdit ? `<button class="publish-homework-btn" data-id="${hw.id}">Publish</button>` : ""}
+        ${canEdit ? `<button class="delete-homework-btn" data-id="${hw.id}" style="background:#a33;">Delete</button>` : ""}
+      </td>`;
+    tbody.appendChild(tr);
+  });
+
+  tbody.querySelectorAll(".edit-homework-btn").forEach((btn) => {
+    btn.addEventListener("click", () => startEditHomework(btn.dataset.id));
+  });
+  tbody.querySelectorAll(".publish-homework-btn").forEach((btn) => {
+    btn.addEventListener("click", () => publishHomework(btn.dataset.id));
+  });
+  tbody.querySelectorAll(".delete-homework-btn").forEach((btn) => {
+    btn.addEventListener("click", () => deleteHomework(btn.dataset.id));
+  });
+}
+
+function startEditHomework(id) {
+  const hw = homeworkCache.find((h) => h.id === id);
+  if (!hw) return;
+
+  editingHomeworkId = id;
+  document.getElementById("hwLessonPlan").value = hw.lessonPlanId || "";
+  document.getElementById("hwSubject").value = hw.subject || "";
+  document.getElementById("hwInstructions").value = hw.instructions || "";
+  document.getElementById("hwDueDate").value = hw.dueDate || "";
+  document.getElementById("hwMaterials").value = arrayToLines(hw.materials);
+
+  document.getElementById("homeworkFormTitle").textContent = "Edit Homework";
+  document.getElementById("hwCancelBtn").style.display = "inline-block";
+  document.getElementById("addHomeworkCard").scrollIntoView({ behavior: "smooth" });
+}
+
+window.cancelEditHomework = function () {
+  editingHomeworkId = null;
+  lastScannedImageBase64 = null;
+  document.getElementById("hwLessonPlan").value = "";
+  document.getElementById("hwPhotoInput").value = "";
+  document.getElementById("hwRawText").value = "";
+  document.getElementById("hwRawText").style.display = "none";
+  document.getElementById("hwStructureBtn").style.display = "none";
+  document.getElementById("hwSubject").value = "";
+  document.getElementById("hwInstructions").value = "";
+  document.getElementById("hwDueDate").value = "";
+  document.getElementById("hwMaterials").value = "";
+  document.getElementById("hwScanStatus").textContent = "";
+  document.getElementById("homeworkFormTitle").textContent = "New Homework";
+  document.getElementById("hwCancelBtn").style.display = "none";
+};
+
+window.saveHomework = async function () {
+  const statusEl = document.getElementById("homeworkStatus");
+  statusEl.textContent = "";
+
+  const lessonPlanId = document.getElementById("hwLessonPlan").value;
+  const instructions = document.getElementById("hwInstructions").value.trim();
+
+  if (!editingHomeworkId && !lessonPlanId) {
+    statusEl.textContent = "Choose an approved lesson plan first.";
+    return;
+  }
+  if (!instructions) {
+    statusEl.textContent = "Instructions are required.";
+    return;
+  }
+
+  const payload = {
+    classId: currentClassId,
+    lessonPlanId,
+    subject: document.getElementById("hwSubject").value.trim(),
+    instructions,
+    dueDate: document.getElementById("hwDueDate").value || null,
+    materials: linesToArray(document.getElementById("hwMaterials").value),
+    sourceType: lastScannedImageBase64 ? "ocr" : "manual",
+    originalImageBase64: lastScannedImageBase64,
+  };
+
+  try {
+    if (editingHomeworkId) {
+      await api(`/homework/${editingHomeworkId}`, { method: "PUT", body: JSON.stringify(payload) });
+    } else {
+      await api("/homework", { method: "POST", body: JSON.stringify(payload) });
+    }
+    window.cancelEditHomework();
+    await loadMyHomework();
+    statusEl.textContent = "Saved.";
+  } catch (err) {
+    statusEl.textContent = "Couldn't save homework: " + err.message;
+  }
+};
+
+async function publishHomework(id) {
+  if (!confirm("Publish this homework? It will be sent to every parent in the class via WhatsApp and cannot be undone.")) return;
+  const statusEl = document.getElementById("homeworkStatus");
+  try {
+    const result = await api(`/homework/${id}/publish`, { method: "POST" });
+    await loadMyHomework();
+    statusEl.textContent = `Published - sent to ${result.sent} of ${result.sent + result.failed} parents.`;
+  } catch (err) {
+    statusEl.textContent = "Couldn't publish: " + err.message;
+  }
+}
+
+async function deleteHomework(id) {
+  if (!confirm("Delete this draft homework?")) return;
+  try {
+    await api(`/homework/${id}`, { method: "DELETE" });
+    await loadMyHomework();
+  } catch (err) {
+    document.getElementById("homeworkStatus").textContent = "Couldn't delete: " + err.message;
+  }
+}
+
+// ---------- Analytics ----------
+
+function populateAnalyticsClassSelect() {
+  const select = document.getElementById("analyticsClass");
+  select.innerHTML = '<option value="">-- Choose a Class --</option>';
+
+  const options = currentRole === "teacher"
+    ? classesCache.filter((c) => c.id === currentClassId)
+    : classesCache;
+
+  options.forEach((c) => {
+    const opt = document.createElement("option");
+    opt.value = c.id;
+    opt.textContent = c.name;
+    select.appendChild(opt);
+  });
+
+  // Teachers only ever have one class - preselect and load it immediately.
+  if (currentRole === "teacher" && options.length) {
+    select.value = options[0].id;
+    window.loadClassAnalytics();
+  }
+}
+
+window.loadClassAnalytics = async function () {
+  const classId = document.getElementById("analyticsClass").value;
+  const subStrandBody = document.getElementById("analyticsSubStrandTable");
+  const subjectBody = document.getElementById("analyticsSubjectTable");
+
+  if (!classId) {
+    subStrandBody.innerHTML = "";
+    subjectBody.innerHTML = "";
+    return;
+  }
+
+  const term = document.getElementById("analyticsTerm").value.trim();
+  const query = term ? `?term=${encodeURIComponent(term)}` : "";
+
+  try {
+    const data = await api(`/analytics/class/${classId}${query}`);
+
+    subStrandBody.innerHTML = data.bySubStrand.length
+      ? data.bySubStrand.map((row) => `
+          <tr>
+            <td>${escapeHtml(row.subject || "—")}</td>
+            <td>${escapeHtml(row.subStrand)}</td>
+            <td>${row.homeworkCount}</td>
+            <td>${row.publishedCount}</td>
+          </tr>`).join("")
+      : "<tr><td colspan='4'>No homework data yet for this class.</td></tr>";
+
+    subjectBody.innerHTML = data.bySubject.length
+      ? data.bySubject.map((row) => `
+          <tr>
+            <td>${escapeHtml(row.subject || "—")}</td>
+            <td>${row.homeworkCount}</td>
+            <td>${row.subStrandsCovered}</td>
+          </tr>`).join("")
+      : "<tr><td colspan='3'>No homework data yet for this class.</td></tr>";
+  } catch (err) {
+    subStrandBody.innerHTML = `<tr><td colspan='4'>Couldn't load analytics: ${escapeHtml(err.message)}</td></tr>`;
+    subjectBody.innerHTML = "";
+  }
+};
 
 // ---------- Utils ----------
 

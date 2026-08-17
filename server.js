@@ -10,6 +10,9 @@
 //   const elimuParentPortal  = require('./elimu-smart/backend/routes/parentPortal');
 //   const elimuTeacherSignup = require('./elimu-smart/backend/routes/teacherSignup');
 //   const elimuSchoolSignup  = require('./elimu-smart/backend/routes/schoolSignup');
+//   const elimuLessonPlans   = require('./elimu-smart/backend/routes/lessonPlans');
+//   const elimuHomework      = require('./elimu-smart/backend/routes/homework');
+//   const elimuAnalytics     = require('./elimu-smart/backend/routes/analytics');
 //   app.use('/api/elimu/classes', elimuClasses);
 //   app.use('/api/elimu/parents', elimuParents);
 //   app.use('/api/elimu/broadcast', elimuBroadcast);
@@ -17,8 +20,13 @@
 //   app.use('/api/elimu/portal', elimuParentPortal);
 //   app.use('/api/elimu/teacher-signup', elimuTeacherSignup);
 //   app.use('/api/elimu/school-signup', elimuSchoolSignup);
+//   app.use('/api/elimu/lesson-plans', elimuLessonPlans);
+//   app.use('/api/elimu/homework', elimuHomework);
+//   app.use('/api/elimu/analytics', elimuAnalytics);
 //
 // (prefix routes with /elimu to avoid clashing with existing route names)
+
+require('dotenv').config();
 
 const express = require('express');
 const cors = require('cors');
@@ -42,6 +50,9 @@ const attendanceRoutes = require('./routes/attendance');
 const parentPortalRoutes = require('./routes/parentPortal');
 const teacherSignupRoutes = require('./routes/teacherSignup');
 const schoolSignupRoutes = require('./routes/schoolSignup');
+const lessonPlansRoutes = require('./routes/lessonPlans');
+const homeworkRoutes = require('./routes/homework');
+const analyticsRoutes = require('./routes/analytics');
 
 const app = express();
 app.use(cors());
@@ -54,6 +65,9 @@ app.use('/api/attendance', attendanceRoutes);
 app.use('/api/portal', parentPortalRoutes);
 app.use('/api/teacher-signup', teacherSignupRoutes);
 app.use('/api/school-signup', schoolSignupRoutes);
+app.use('/api/lesson-plans', lessonPlansRoutes);
+app.use('/api/homework', homeworkRoutes);
+app.use('/api/analytics', analyticsRoutes);
 
 app.get('/health', (req, res) => res.json({ status: 'ok', service: 'elimu-smart' }));
 

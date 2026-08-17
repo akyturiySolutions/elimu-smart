@@ -258,7 +258,7 @@
     <input id="parentPhone" placeholder="Phone (e.g. 07XXXXXXXX)">
     <input id="parentWhatsapp" placeholder="WhatsApp number (leave blank to use phone)">
     <select id="parentClass"><option value="">-- No Class --</option></select>
-    <button onclick="addMember()">Add Parent</button>
+    <button onclick="addParent()">Add Parent</button>
   </div>
 
   <div class="card" id="bulkAddParentCard">
@@ -268,7 +268,7 @@
     <textarea id="bulkMemberText" rows="6" placeholder="Peter Mwangi, 0722123456
 Jane Wanjiru, 0733987654
 0711222333"></textarea>
-    <button onclick="bulkAddMembers()">Add All</button>
+    <button onclick="bulkAddParents()">Add All</button>
     <p id="bulkAddStatus" style="font-size:13px;"></p>
   </div>
 
@@ -278,8 +278,8 @@ Jane Wanjiru, 0733987654
     <p id="parentTotalCount" style="font-weight:600;color:var(--indigo-dark);"></p>
     <select id="parentSearchClass"><option value="">-- All classes --</option></select>
     <input id="parentSearchPhone" type="tel" placeholder="Search by phone number">
-    <button onclick="filterMembers()">Search</button>
-    <button onclick="clearMemberSearch()" style="background:#888;">Clear</button>
+    <button onclick="filterParents()">Search</button>
+    <button onclick="clearParentSearch()" style="background:#888;">Clear</button>
     <div class="table-wrap parents-scroll"><table>
       <thead><tr><th>Name</th><th>Phone</th><th>Class</th><th>Actions</th></tr></thead>
       <tbody id="parentsTable"></tbody>
@@ -395,6 +395,59 @@ Jane Wanjiru, 0733987654
     <div class="table-wrap"><table>
       <thead><tr><th>Class</th><th>Term / Week</th><th>Subject</th><th>Teacher</th><th>Status</th><th>Actions</th></tr></thead>
       <tbody id="lessonPlanReviewTable"></tbody>
+    </table></div>
+  </div>
+
+  <div class="card" id="addHomeworkCard" style="display:none;">
+    <h2 id="homeworkFormTitle">New Homework</h2>
+    <p class="hint">Must be linked to one of your approved lesson plans. Scan a handwritten note to fill in the details automatically, or type them in directly.</p>
+
+    <select id="hwLessonPlan"><option value="">-- Choose an approved lesson plan --</option></select>
+
+    <div id="hwScanSection">
+      <input id="hwPhotoInput" type="file" accept="image/*" capture="environment">
+      <button id="hwScanBtn" onclick="scanHomeworkPhoto()">Scan Note</button>
+      <p id="hwScanStatus" style="font-size:13px;"></p>
+    </div>
+
+    <textarea id="hwRawText" rows="3" placeholder="Scanned text will appear here — review and fix any [unclear] markers before structuring." style="display:none;"></textarea>
+    <button id="hwStructureBtn" onclick="structureHomeworkNote()" style="display:none;">Fill In Details From This Text</button>
+
+    <input id="hwSubject" placeholder="Subject">
+    <textarea id="hwInstructions" rows="3" placeholder="Homework instructions"></textarea>
+    <input id="hwDueDate" type="date">
+    <textarea id="hwMaterials" rows="2" placeholder="Materials needed, one per line"></textarea>
+
+    <button id="hwSaveBtn" onclick="saveHomework()">Save Draft</button>
+    <button id="hwCancelBtn" onclick="cancelEditHomework()" style="background:#888;display:none;">Cancel Edit</button>
+    <p id="homeworkStatus" style="font-size:13px;"></p>
+  </div>
+
+  <div class="card" id="myHomeworkCard" style="display:none;">
+    <h2>My Homework</h2>
+    <p class="hint">Draft homework can be edited or published. Publishing sends it to every parent in the class via WhatsApp and cannot be undone.</p>
+    <div class="table-wrap"><table>
+      <thead><tr><th>Subject</th><th>Due</th><th>Status</th><th>Actions</th></tr></thead>
+      <tbody id="myHomeworkTable"></tbody>
+    </table></div>
+  </div>
+
+  <div class="card" id="analyticsCard">
+    <h2>Class Analytics</h2>
+    <p class="hint">Homework coverage by CBC sub-strand, rolling up to subject. This tracks how many homework items have been assigned per sub-strand — not completion, since there's no parent-side "mark as done" yet.</p>
+    <select id="analyticsClass" onchange="loadClassAnalytics()"><option value="">-- Choose a Class --</option></select>
+    <input id="analyticsTerm" placeholder="Filter by term (optional, e.g. Term 2)" onchange="loadClassAnalytics()">
+
+    <h3 style="font-size:15px;margin-top:16px;">By Sub-strand</h3>
+    <div class="table-wrap"><table>
+      <thead><tr><th>Subject</th><th>Sub-strand</th><th>Homework Items</th><th>Published</th></tr></thead>
+      <tbody id="analyticsSubStrandTable"></tbody>
+    </table></div>
+
+    <h3 style="font-size:15px;margin-top:16px;">By Subject</h3>
+    <div class="table-wrap"><table>
+      <thead><tr><th>Subject</th><th>Total Homework Items</th><th>Sub-strands Covered</th></tr></thead>
+      <tbody id="analyticsSubjectTable"></tbody>
     </table></div>
   </div>
 </div>
