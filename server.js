@@ -56,7 +56,11 @@ const analyticsRoutes = require('./routes/analytics');
 
 const app = express();
 app.use(cors());
-app.use(express.json());
+// Default express.json() body limit is 100kb - far too small for a
+// base64-encoded phone photo (often several MB before encoding, and
+// base64 adds ~33% on top of that). Raised to 15mb for the homework OCR
+// endpoint's image uploads.
+app.use(express.json({ limit: '15mb' }));
 
 app.use('/api/classes', classesRoutes);
 app.use('/api/parents', parentsRoutes);
