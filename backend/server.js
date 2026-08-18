@@ -11,6 +11,8 @@
 //   const elimuTeacherSignup = require('./elimu-smart/backend/routes/teacherSignup');
 //   const elimuSchoolSignup  = require('./elimu-smart/backend/routes/schoolSignup');
 //   const elimuLessonPlans   = require('./elimu-smart/backend/routes/lessonPlans');
+//   const elimuHomework      = require('./elimu-smart/backend/routes/homework');
+//   const elimuAnalytics     = require('./elimu-smart/backend/routes/analytics');
 //   app.use('/api/elimu/classes', elimuClasses);
 //   app.use('/api/elimu/parents', elimuParents);
 //   app.use('/api/elimu/broadcast', elimuBroadcast);
@@ -19,6 +21,8 @@
 //   app.use('/api/elimu/teacher-signup', elimuTeacherSignup);
 //   app.use('/api/elimu/school-signup', elimuSchoolSignup);
 //   app.use('/api/elimu/lesson-plans', elimuLessonPlans);
+//   app.use('/api/elimu/homework', elimuHomework);
+//   app.use('/api/elimu/analytics', elimuAnalytics);
 //
 // (prefix routes with /elimu to avoid clashing with existing route names)
 
@@ -37,6 +41,7 @@ admin.initializeApp({
     clientEmail: process.env.FIREBASE_CLIENT_EMAIL,
     privateKey: (process.env.FIREBASE_PRIVATE_KEY || '').replace(/\\n/g, '\n'),
   }),
+  storageBucket: process.env.FIREBASE_STORAGE_BUCKET,
 });
 
 const classesRoutes = require('./routes/classes');
@@ -47,10 +52,16 @@ const parentPortalRoutes = require('./routes/parentPortal');
 const teacherSignupRoutes = require('./routes/teacherSignup');
 const schoolSignupRoutes = require('./routes/schoolSignup');
 const lessonPlansRoutes = require('./routes/lessonPlans');
+const homeworkRoutes = require('./routes/homework');
+const analyticsRoutes = require('./routes/analytics');
 
 const app = express();
 app.use(cors());
-app.use(express.json());
+// Default express.json() body limit is 100kb - far too small for a
+// base64-encoded phone photo (often several MB before encoding, and
+// base64 adds ~33% on top of that). Raised to 15mb for the homework OCR
+// endpoint's image uploads.
+app.use(express.json({ limit: '15mb' }));
 
 app.use('/api/classes', classesRoutes);
 app.use('/api/parents', parentsRoutes);
@@ -60,6 +71,8 @@ app.use('/api/portal', parentPortalRoutes);
 app.use('/api/teacher-signup', teacherSignupRoutes);
 app.use('/api/school-signup', schoolSignupRoutes);
 app.use('/api/lesson-plans', lessonPlansRoutes);
+app.use('/api/homework', homeworkRoutes);
+app.use('/api/analytics', analyticsRoutes);
 
 app.get('/health', (req, res) => res.json({ status: 'ok', service: 'elimu-smart' }));
 
