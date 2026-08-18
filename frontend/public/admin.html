@@ -227,6 +227,71 @@
     .absent-row, .attend-row { flex-wrap: wrap; }
     .absent-row a, .absent-row button { margin-top: 6px; }
   }
+  /* ---- Tab navigation, added for a professional dashboard layout ---- */
+  .app-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 12px;
+    margin-bottom: 16px;
+  }
+  .app-header h1 { margin: 0; }
+  .app-header-right {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+  }
+  #roleBadge {
+    font-size: 13px;
+    font-weight: 600;
+    color: var(--indigo-dark);
+    background: var(--card);
+    border: 1px solid var(--line);
+    border-radius: 999px;
+    padding: 6px 14px;
+    margin: 0;
+  }
+  .logout-btn {
+    background: transparent;
+    color: var(--ink-soft);
+    border: 1px solid var(--line);
+    padding: 8px 16px;
+  }
+  .logout-btn:hover { background: var(--line); }
+
+  .tab-nav {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    border-bottom: 2px solid var(--line);
+    margin-bottom: 20px;
+    padding-bottom: 0;
+  }
+  .tab-btn {
+    background: transparent;
+    color: var(--ink-soft);
+    border: none;
+    border-bottom: 3px solid transparent;
+    border-radius: 0;
+    padding: 10px 16px;
+    font-family: 'Karla', sans-serif;
+    font-weight: 600;
+    font-size: 14px;
+    cursor: pointer;
+  }
+  .tab-btn:hover { color: var(--indigo-dark); background: var(--card); }
+  .tab-btn.active {
+    color: var(--indigo-dark);
+    border-bottom-color: var(--ochre);
+  }
+  .tab-panel { animation: fadeIn 0.15s ease-in; }
+  @keyframes fadeIn { from { opacity: 0; } to { opacity: 1; } }
+
+  @media (max-width: 600px) {
+    .tab-nav { gap: 2px; }
+    .tab-btn { padding: 8px 10px; font-size: 13px; }
+  }
 </style>
 </head>
 <body>
@@ -240,10 +305,25 @@
 </div>
 
 <div id="appView" class="hidden">
-  <h1>Elimu Smart Admin</h1>
-  <button onclick="logout()" style="background:#888;">Log Out</button>
-  <p id="roleBadge" style="font-size:14px;color:#555;font-weight:bold;"></p>
+  <div class="app-header">
+    <h1>Elimu Smart</h1>
+    <div class="app-header-right">
+      <p id="roleBadge"></p>
+      <button class="logout-btn" onclick="logout()">Log Out</button>
+    </div>
+  </div>
 
+  <nav class="tab-nav" id="tabNav">
+    <button class="tab-btn" data-tab="parents" onclick="showTab('parents')">Parents</button>
+    <button class="tab-btn" data-tab="classes" id="tabBtnClasses" onclick="showTab('classes')">Classes</button>
+    <button class="tab-btn" data-tab="attendance" onclick="showTab('attendance')">Attendance</button>
+    <button class="tab-btn" data-tab="broadcast" onclick="showTab('broadcast')">Broadcast</button>
+    <button class="tab-btn" data-tab="lessonplans" onclick="showTab('lessonplans')">Lesson Plans</button>
+    <button class="tab-btn" data-tab="homework" id="tabBtnHomework" onclick="showTab('homework')">Homework</button>
+    <button class="tab-btn" data-tab="analytics" onclick="showTab('analytics')">Analytics</button>
+  </nav>
+
+  <div class="tab-panel" id="panel-parents" style="display:none;">
   <div class="card">
     <h2>Parent Portal Link</h2>
     <p class="hint">Share this link with parents so they can find their class and tap "Join WhatsApp Group" themselves.</p>
@@ -285,7 +365,9 @@ Jane Wanjiru, 0733987654
       <tbody id="parentsTable"></tbody>
     </table></div>
   </div>
+  </div>
 
+  <div class="tab-panel" id="panel-classes" style="display:none;">
   <div class="card" id="addClassCard">
     <h2 id="classFormTitle">Add Class</h2>
     <input id="className" placeholder="Class name (e.g. Bethany Class)">
@@ -315,8 +397,9 @@ Jane Wanjiru, 0733987654
     <a id="teacherInviteWaLink" href="#" target="_blank" rel="noopener"><button class="wa-btn" type="button">Send via WhatsApp</button></a>
     <p id="teacherInviteStatus" style="font-size:13px;"></p>
   </div>
+  </div>
 
-
+  <div class="tab-panel" id="panel-attendance" style="display:none;">
   <div class="card">
     <h2>Attendance</h2>
     <select id="attendanceClass" onchange="loadAttendanceForm()"><option value="">-- Choose a Class --</option></select>
@@ -346,7 +429,9 @@ Jane Wanjiru, 0733987654
     <p class="hint">Flagged when attendance rate is below 50% over recent meetings (with at least 2 meetings recorded).</p>
     <div id="lowAttendanceList"></div>
   </div>
+  </div>
 
+  <div class="tab-panel" id="panel-broadcast" style="display:none;">
   <div class="card" id="broadcastCard">
     <h2>Send to Class <span class="tier-badge tier-3">Level 3: Automated</span></h2>
     <p class="hint">Sends automatically to every parent's WhatsApp via the WhatsApp Business API — no manual tap needed. Requires the number/template setup in <code>docs/WHATSAPP_SETUP_CHECKLIST.md</code>.</p>
@@ -356,7 +441,9 @@ Jane Wanjiru, 0733987654
     <button id="broadcastSendBtn" onclick="sendBroadcast()">Send Automatically</button>
     <p id="broadcastStatus" style="font-size:13px;"></p>
   </div>
+  </div>
 
+  <div class="tab-panel" id="panel-lessonplans" style="display:none;">
   <div class="card" id="addLessonPlanCard">
     <h2 id="lessonPlanFormTitle">New Lesson Plan</h2>
     <p class="hint">Term and subject are required. Everything else can be filled in or left for later — it stays a draft until you submit it for your admin's approval.</p>
@@ -397,7 +484,9 @@ Jane Wanjiru, 0733987654
       <tbody id="lessonPlanReviewTable"></tbody>
     </table></div>
   </div>
+  </div>
 
+  <div class="tab-panel" id="panel-homework" style="display:none;">
   <div class="card" id="addHomeworkCard" style="display:none;">
     <h2 id="homeworkFormTitle">New Homework</h2>
     <p class="hint">Must be linked to one of your approved lesson plans. Scan a handwritten note to fill in the details automatically, or type them in directly.</p>
@@ -431,7 +520,9 @@ Jane Wanjiru, 0733987654
       <tbody id="myHomeworkTable"></tbody>
     </table></div>
   </div>
+  </div>
 
+  <div class="tab-panel" id="panel-analytics" style="display:none;">
   <div class="card" id="analyticsCard">
     <h2>Class Analytics</h2>
     <p class="hint">Homework coverage by CBC sub-strand, rolling up to subject. This tracks how many homework items have been assigned per sub-strand — not completion, since there's no parent-side "mark as done" yet.</p>
@@ -449,6 +540,7 @@ Jane Wanjiru, 0733987654
       <thead><tr><th>Subject</th><th>Total Homework Items</th><th>Sub-strands Covered</th></tr></thead>
       <tbody id="analyticsSubjectTable"></tbody>
     </table></div>
+  </div>
   </div>
 </div>
 
