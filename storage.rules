@@ -1,0 +1,18 @@
+rules_version = '2';
+service firebase.storage {
+  match /b/{bucket}/o {
+
+    // Homework photos. As with firestore.rules, the backend's Admin SDK
+    // bypasses these rules entirely - this is documentation/defense-in-depth
+    // for if a client SDK ever talks to Storage directly (not the case
+    // today; uploads go through backend/services/storage.js).
+    match /schools/{schoolId}/homework-images/{fileName} {
+      allow read: if request.auth != null && request.auth.token.schoolId == schoolId;
+      allow write: if false; // uploads happen via Admin SDK only
+    }
+
+    match /{allPaths=**} {
+      allow read, write: if false;
+    }
+  }
+}

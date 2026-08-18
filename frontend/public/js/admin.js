@@ -6,6 +6,13 @@ import {
   onAuthStateChanged,
 } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-auth.js";
 
+// BUILD_VERSION: bump this string every time you deploy a real change.
+// Printed to the console on every page load - the fastest way to check
+// "is my latest deploy actually live?" without digging through DevTools
+// Network tab. Just open the console after a deploy and compare.
+const BUILD_VERSION = "2026-08-18-tabbed-ui";
+console.log("Elimu Smart admin.js build:", BUILD_VERSION);
+
 let currentToken = null;
 let classesCache = [];
 let parentsCache = [];
@@ -78,6 +85,7 @@ onAuthStateChanged(auth, async (user) => {
     applyRoleUI();
     await loadClasses();
     await loadParents();
+    populateAnalyticsClassSelect();
 
     // Now that parentsCache is populated, actually render the roll call
     // for teachers (dropdown was pre-selected in loadClasses above).
@@ -87,6 +95,8 @@ onAuthStateChanged(auth, async (user) => {
 
     if (currentRole === "teacher") {
       await loadMyLessonPlans();
+      await loadApprovedLessonPlansForHomework();
+      await loadMyHomework();
     } else {
       await loadLessonPlanReviewQueue();
     }
@@ -118,6 +128,8 @@ function applyRoleUI() {
   const addLessonPlanCard = document.getElementById("addLessonPlanCard");
   const myLessonPlansCard = document.getElementById("myLessonPlansCard");
   const lessonPlanReviewCard = document.getElementById("lessonPlanReviewCard");
+  const addHomeworkCard = document.getElementById("addHomeworkCard");
+  const myHomeworkCard = document.getElementById("myHomeworkCard");
 
   if (currentRole === "teacher") {
     addClassCard.style.display = "none"; // teachers can edit their own class, not create new ones
@@ -128,6 +140,8 @@ function applyRoleUI() {
     addLessonPlanCard.style.display = "block";
     myLessonPlansCard.style.display = "block";
     lessonPlanReviewCard.style.display = "none";
+    addHomeworkCard.style.display = "block";
+    myHomeworkCard.style.display = "block";
   } else {
     // admin gets full access
     addClassCard.style.display = "block";
@@ -138,8 +152,29 @@ function applyRoleUI() {
     addLessonPlanCard.style.display = "none"; // admin doesn't author plans, only reviews them
     myLessonPlansCard.style.display = "none";
     lessonPlanReviewCard.style.display = "block";
+    addHomeworkCard.style.display = "none"; // admin doesn't author homework either
+    myHomeworkCard.style.display = "none";
   }
+
+  // Tab buttons: Classes and Homework are role-specific, hide the whole
+  // tab button (not just its content) so a role never sees an empty tab.
+  document.getElementById("tabBtnClasses").style.display = currentRole === "teacher" ? "none" : "inline-block";
+  document.getElementById("tabBtnHomework").style.display = currentRole === "teacher" ? "inline-block" : "none";
+
+  // Default to the first visible tab on login.
+  const firstVisibleBtn = Array.from(document.querySelectorAll(".tab-btn"))
+    .find((btn) => btn.style.display !== "none");
+  showTab(firstVisibleBtn ? firstVisibleBtn.dataset.tab : "parents");
 }
+
+window.showTab = function (tabName) {
+  document.querySelectorAll(".tab-panel").forEach((panel) => {
+    panel.style.display = panel.id === "panel-" + tabName ? "block" : "none";
+  });
+  document.querySelectorAll(".tab-btn").forEach((btn) => {
+    btn.classList.toggle("active", btn.dataset.tab === tabName);
+  });
+};
 
 // Level 3 (automated sends) is admin-only. Teachers still see the
 // card - so they know the capability exists - but can't use it: inputs
@@ -314,7 +349,7 @@ function renderParentsTable(list) {
   });
 }
 
-window.filterMembers = function () {
+window.filterParents = function () {
   const classId = document.getElementById("parentSearchClass").value;
   const phoneQuery = document.getElementById("parentSearchPhone").value.replace(/\D/g, "");
 
@@ -328,13 +363,13 @@ window.filterMembers = function () {
   renderParentsTable(filtered);
 };
 
-window.clearMemberSearch = function () {
+window.clearParentSearch = function () {
   document.getElementById("parentSearchClass").value = "";
   document.getElementById("parentSearchPhone").value = "";
   renderParentsTable(parentsCache);
 };
 
-window.addMember = async function () {
+window.addParent = async function () {
   const name = document.getElementById("parentName").value.trim();
   const phone = document.getElementById("parentPhone").value.trim();
   const whatsappNumber = document.getElementById("parentWhatsapp").value.trim();
@@ -378,7 +413,7 @@ function parseBulkMemberText(text) {
   }).filter((m) => m.phone);
 }
 
-window.bulkAddMembers = async function () {
+window.bulkAddParents = async function () {
   const classId = document.getElementById("bulkParentClass").value || null;
   const text = document.getElementById("bulkMemberText").value;
   const statusEl = document.getElementById("bulkAddStatus");
@@ -657,7 +692,7 @@ document.getElementById("attendanceDate").addEventListener("change", () => {
 });
 
 document.getElementById("parentSearchPhone").addEventListener("keydown", (e) => {
-  if (e.key === "Enter") window.filterMembers();
+  if (e.key === "Enter") window.filterParents();
 });
 
 window.saveAttendance = async function () {
@@ -862,6 +897,7 @@ function renderMyLessonPlansTable(list) {
       <td>
         ${canEdit ? `<button class="edit-lesson-plan-btn" data-id="${lp.id}">Edit</button>` : ""}
         ${canEdit ? `<button class="submit-lesson-plan-btn" data-id="${lp.id}">Submit</button>` : ""}
+        <button class="print-lesson-plan-btn" data-id="${lp.id}">Print</button>
         ${canEdit ? `<button class="delete-lesson-plan-btn" data-id="${lp.id}" style="background:#a33;">Delete</button>` : ""}
       </td>`;
     tbody.appendChild(tr);
@@ -872,6 +908,9 @@ function renderMyLessonPlansTable(list) {
   });
   tbody.querySelectorAll(".submit-lesson-plan-btn").forEach((btn) => {
     btn.addEventListener("click", () => submitLessonPlan(btn.dataset.id));
+  });
+  tbody.querySelectorAll(".print-lesson-plan-btn").forEach((btn) => {
+    btn.addEventListener("click", () => printLessonPlan(btn.dataset.id, lessonPlansCache));
   });
   tbody.querySelectorAll(".delete-lesson-plan-btn").forEach((btn) => {
     btn.addEventListener("click", () => deleteLessonPlan(btn.dataset.id));
@@ -1000,6 +1039,7 @@ function renderLessonPlanReviewTable(list) {
       <td>
         ${lp.status === "submitted" ? `<button class="approve-lesson-plan-btn" data-id="${lp.id}">Approve</button>` : ""}
         ${lp.status === "submitted" || lp.status === "approved" ? `<button class="reject-lesson-plan-btn" data-id="${lp.id}" style="background:#888;">Back to Draft</button>` : ""}
+        <button class="print-lesson-plan-btn" data-id="${lp.id}">Print</button>
       </td>`;
     tbody.appendChild(tr);
   });
@@ -1009,6 +1049,9 @@ function renderLessonPlanReviewTable(list) {
   });
   tbody.querySelectorAll(".reject-lesson-plan-btn").forEach((btn) => {
     btn.addEventListener("click", () => reviewLessonPlan(btn.dataset.id, "draft"));
+  });
+  tbody.querySelectorAll(".print-lesson-plan-btn").forEach((btn) => {
+    btn.addEventListener("click", () => printLessonPlan(btn.dataset.id, list));
   });
 }
 
@@ -1023,6 +1066,403 @@ async function reviewLessonPlan(id, newStatus) {
   } catch (err) {
     alert("Couldn't update lesson plan: " + err.message);
   }
+}
+
+// ---------- Homework (AI/OCR) ----------
+
+let homeworkCache = [];
+let editingHomeworkId = null;
+let lastScannedImageBase64 = null; // kept so the published record can store the original photo
+let lastScannedImageMediaType = null;
+
+function fileToBase64(file) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => {
+      // reader.result is "data:image/jpeg;base64,AAAA..." - strip the prefix
+      const base64 = reader.result.split(",")[1];
+      resolve(base64);
+    };
+    reader.onerror = reject;
+    reader.readAsDataURL(file);
+  });
+}
+
+async function loadApprovedLessonPlansForHomework() {
+  const { lessonPlans } = await api("/lesson-plans");
+  const approved = lessonPlans.filter((lp) => lp.status === "approved");
+  const select = document.getElementById("hwLessonPlan");
+  select.innerHTML = '<option value="">-- Choose an approved lesson plan --</option>';
+  approved.forEach((lp) => {
+    const opt = document.createElement("option");
+    opt.value = lp.id;
+    opt.textContent = `${lp.term || ""}${lp.week ? " Wk " + lp.week : ""} - ${lp.subject || ""}${lp.subStrand ? " (" + lp.subStrand + ")" : ""}`;
+    select.appendChild(opt);
+  });
+  if (!approved.length) {
+    select.innerHTML = '<option value="">-- No approved lesson plans yet --</option>';
+  }
+}
+
+window.scanHomeworkPhoto = async function () {
+  const statusEl = document.getElementById("hwScanStatus");
+  const fileInput = document.getElementById("hwPhotoInput");
+  const file = fileInput.files[0];
+
+  if (!file) {
+    statusEl.textContent = "Choose or take a photo first.";
+    return;
+  }
+
+  statusEl.textContent = "Scanning...";
+  try {
+    const base64 = await fileToBase64(file);
+    lastScannedImageBase64 = base64;
+    lastScannedImageMediaType = file.type || "image/jpeg";
+    const result = await api("/homework/ocr", {
+      method: "POST",
+      body: JSON.stringify({ imageBase64: base64, mediaType: lastScannedImageMediaType }),
+    });
+
+    document.getElementById("hwRawText").value = result.text;
+    document.getElementById("hwRawText").style.display = "block";
+    document.getElementById("hwStructureBtn").style.display = "inline-block";
+    statusEl.textContent = result.text.includes("[unclear]")
+      ? "Scanned - check the [unclear] spots below before continuing."
+      : "Scanned. Review the text, then tap \"Fill In Details From This Text\".";
+  } catch (err) {
+    // A 422 from the backend means low confidence - the message already
+    // explains it's a retake-photo situation, so just show it as-is.
+    lastScannedImageBase64 = null;
+    lastScannedImageMediaType = null;
+    statusEl.textContent = err.message;
+  }
+};
+
+window.structureHomeworkNote = async function () {
+  const statusEl = document.getElementById("hwScanStatus");
+  const rawText = document.getElementById("hwRawText").value.trim();
+  if (!rawText) {
+    statusEl.textContent = "Nothing to structure yet.";
+    return;
+  }
+
+  statusEl.textContent = "Filling in details...";
+  try {
+    const structured = await api("/homework/structure", { method: "POST", body: JSON.stringify({ rawText }) });
+    document.getElementById("hwSubject").value = structured.subject;
+    document.getElementById("hwInstructions").value = structured.instructions;
+    document.getElementById("hwDueDate").value = structured.dueDate;
+    document.getElementById("hwMaterials").value = arrayToLines(structured.materials);
+    statusEl.textContent = "Details filled in below - review and edit before saving.";
+  } catch (err) {
+    statusEl.textContent = "Couldn't fill in details: " + err.message;
+  }
+};
+
+async function loadMyHomework() {
+  const { homework } = await api("/homework");
+  homeworkCache = homework;
+  renderMyHomeworkTable(homeworkCache);
+}
+
+function renderMyHomeworkTable(list) {
+  const tbody = document.getElementById("myHomeworkTable");
+  tbody.innerHTML = "";
+
+  if (!list.length) {
+    tbody.innerHTML = "<tr><td colspan='4'>No homework yet.</td></tr>";
+    return;
+  }
+
+  list.forEach((hw) => {
+    const canEdit = hw.status === "draft";
+    const tr = document.createElement("tr");
+    tr.innerHTML = `
+      <td>${escapeHtml(hw.subject || "")}</td>
+      <td>${escapeHtml(hw.dueDate || "—")}</td>
+      <td>${escapeHtml(hw.status)}</td>
+      <td>
+        ${canEdit ? `<button class="edit-homework-btn" data-id="${hw.id}">Edit</button>` : ""}
+        ${canEdit ? `<button class="publish-homework-btn" data-id="${hw.id}">Publish</button>` : ""}
+        <button class="print-homework-btn" data-id="${hw.id}">Print</button>
+        ${canEdit ? `<button class="delete-homework-btn" data-id="${hw.id}" style="background:#a33;">Delete</button>` : ""}
+      </td>`;
+    tbody.appendChild(tr);
+  });
+
+  tbody.querySelectorAll(".edit-homework-btn").forEach((btn) => {
+    btn.addEventListener("click", () => startEditHomework(btn.dataset.id));
+  });
+  tbody.querySelectorAll(".publish-homework-btn").forEach((btn) => {
+    btn.addEventListener("click", () => publishHomework(btn.dataset.id));
+  });
+  tbody.querySelectorAll(".print-homework-btn").forEach((btn) => {
+    btn.addEventListener("click", () => printHomework(btn.dataset.id, list));
+  });
+  tbody.querySelectorAll(".delete-homework-btn").forEach((btn) => {
+    btn.addEventListener("click", () => deleteHomework(btn.dataset.id));
+  });
+}
+
+function startEditHomework(id) {
+  const hw = homeworkCache.find((h) => h.id === id);
+  if (!hw) return;
+
+  editingHomeworkId = id;
+  document.getElementById("hwLessonPlan").value = hw.lessonPlanId || "";
+  document.getElementById("hwSubject").value = hw.subject || "";
+  document.getElementById("hwInstructions").value = hw.instructions || "";
+  document.getElementById("hwDueDate").value = hw.dueDate || "";
+  document.getElementById("hwMaterials").value = arrayToLines(hw.materials);
+
+  document.getElementById("homeworkFormTitle").textContent = "Edit Homework";
+  document.getElementById("hwCancelBtn").style.display = "inline-block";
+  document.getElementById("addHomeworkCard").scrollIntoView({ behavior: "smooth" });
+}
+
+window.cancelEditHomework = function () {
+  editingHomeworkId = null;
+  lastScannedImageBase64 = null;
+  lastScannedImageMediaType = null;
+  document.getElementById("hwLessonPlan").value = "";
+  document.getElementById("hwPhotoInput").value = "";
+  document.getElementById("hwRawText").value = "";
+  document.getElementById("hwRawText").style.display = "none";
+  document.getElementById("hwStructureBtn").style.display = "none";
+  document.getElementById("hwSubject").value = "";
+  document.getElementById("hwInstructions").value = "";
+  document.getElementById("hwDueDate").value = "";
+  document.getElementById("hwMaterials").value = "";
+  document.getElementById("hwScanStatus").textContent = "";
+  document.getElementById("homeworkFormTitle").textContent = "New Homework";
+  document.getElementById("hwCancelBtn").style.display = "none";
+};
+
+window.saveHomework = async function () {
+  const statusEl = document.getElementById("homeworkStatus");
+  statusEl.textContent = "";
+
+  const lessonPlanId = document.getElementById("hwLessonPlan").value;
+  const instructions = document.getElementById("hwInstructions").value.trim();
+
+  if (!editingHomeworkId && !lessonPlanId) {
+    statusEl.textContent = "Choose an approved lesson plan first.";
+    return;
+  }
+  if (!instructions) {
+    statusEl.textContent = "Instructions are required.";
+    return;
+  }
+
+  const payload = {
+    classId: currentClassId,
+    lessonPlanId,
+    subject: document.getElementById("hwSubject").value.trim(),
+    instructions,
+    dueDate: document.getElementById("hwDueDate").value || null,
+    materials: linesToArray(document.getElementById("hwMaterials").value),
+    sourceType: lastScannedImageBase64 ? "ocr" : "manual",
+    originalImageBase64: lastScannedImageBase64,
+    originalImageMediaType: lastScannedImageMediaType,
+  };
+
+  try {
+    if (editingHomeworkId) {
+      await api(`/homework/${editingHomeworkId}`, { method: "PUT", body: JSON.stringify(payload) });
+    } else {
+      await api("/homework", { method: "POST", body: JSON.stringify(payload) });
+    }
+    window.cancelEditHomework();
+    await loadMyHomework();
+    statusEl.textContent = "Saved.";
+  } catch (err) {
+    statusEl.textContent = "Couldn't save homework: " + err.message;
+  }
+};
+
+async function publishHomework(id) {
+  if (!confirm("Publish this homework? It will be sent to every parent in the class via WhatsApp and cannot be undone.")) return;
+  const statusEl = document.getElementById("homeworkStatus");
+  try {
+    const result = await api(`/homework/${id}/publish`, { method: "POST" });
+    await loadMyHomework();
+    statusEl.textContent = `Published - sent to ${result.sent} of ${result.sent + result.failed} parents.`;
+  } catch (err) {
+    statusEl.textContent = "Couldn't publish: " + err.message;
+  }
+}
+
+async function deleteHomework(id) {
+  if (!confirm("Delete this draft homework?")) return;
+  try {
+    await api(`/homework/${id}`, { method: "DELETE" });
+    await loadMyHomework();
+  } catch (err) {
+    document.getElementById("homeworkStatus").textContent = "Couldn't delete: " + err.message;
+  }
+}
+
+// ---------- Analytics ----------
+
+function populateAnalyticsClassSelect() {
+  const select = document.getElementById("analyticsClass");
+  select.innerHTML = '<option value="">-- Choose a Class --</option>';
+
+  const options = currentRole === "teacher"
+    ? classesCache.filter((c) => c.id === currentClassId)
+    : classesCache;
+
+  options.forEach((c) => {
+    const opt = document.createElement("option");
+    opt.value = c.id;
+    opt.textContent = c.name;
+    select.appendChild(opt);
+  });
+
+  // Teachers only ever have one class - preselect and load it immediately.
+  if (currentRole === "teacher" && options.length) {
+    select.value = options[0].id;
+    window.loadClassAnalytics();
+  }
+}
+
+window.loadClassAnalytics = async function () {
+  const classId = document.getElementById("analyticsClass").value;
+  const subStrandBody = document.getElementById("analyticsSubStrandTable");
+  const subjectBody = document.getElementById("analyticsSubjectTable");
+
+  if (!classId) {
+    subStrandBody.innerHTML = "";
+    subjectBody.innerHTML = "";
+    return;
+  }
+
+  const term = document.getElementById("analyticsTerm").value.trim();
+  const query = term ? `?term=${encodeURIComponent(term)}` : "";
+
+  try {
+    const data = await api(`/analytics/class/${classId}${query}`);
+
+    subStrandBody.innerHTML = data.bySubStrand.length
+      ? data.bySubStrand.map((row) => `
+          <tr>
+            <td>${escapeHtml(row.subject || "—")}</td>
+            <td>${escapeHtml(row.subStrand)}</td>
+            <td>${row.homeworkCount}</td>
+            <td>${row.publishedCount}</td>
+          </tr>`).join("")
+      : "<tr><td colspan='4'>No homework data yet for this class.</td></tr>";
+
+    subjectBody.innerHTML = data.bySubject.length
+      ? data.bySubject.map((row) => `
+          <tr>
+            <td>${escapeHtml(row.subject || "—")}</td>
+            <td>${row.homeworkCount}</td>
+            <td>${row.subStrandsCovered}</td>
+          </tr>`).join("")
+      : "<tr><td colspan='3'>No homework data yet for this class.</td></tr>";
+  } catch (err) {
+    subStrandBody.innerHTML = `<tr><td colspan='4'>Couldn't load analytics: ${escapeHtml(err.message)}</td></tr>`;
+    subjectBody.innerHTML = "";
+  }
+};
+
+// ---------- Print ----------
+//
+// Shared print utility, as designed for [[elimu]]: one print/export path
+// reused by lesson plans and homework rather than building separate PDF
+// generation per feature. Uses the browser's native print (a new window
+// styled for print, then window.print()) rather than a PDF library - no
+// new backend dependency, and it lets the parent's own printer/print-to-PDF
+// handle paper size and margins correctly.
+
+function openPrintWindow(title, bodyHtml) {
+  const printWindow = window.open("", "_blank", "width=800,height=900");
+  if (!printWindow) {
+    alert("Please allow pop-ups for this site to use Print.");
+    return;
+  }
+
+  printWindow.document.write(`<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>${escapeHtml(title)}</title>
+<style>
+  body { font-family: 'Georgia', serif; color: #2b2b2b; max-width: 700px; margin: 32px auto; line-height: 1.5; }
+  h1 { font-size: 22px; border-bottom: 2px solid #2b2b2b; padding-bottom: 8px; }
+  h2 { font-size: 15px; margin-top: 22px; margin-bottom: 4px; text-transform: uppercase; letter-spacing: 0.5px; color: #555; }
+  .meta { font-size: 13px; color: #555; margin-bottom: 16px; }
+  ul { margin: 4px 0; padding-left: 20px; }
+  .empty { color: #888; font-style: italic; }
+  @media print {
+    .no-print { display: none; }
+  }
+</style>
+</head>
+<body>
+  <button class="no-print" onclick="window.print()" style="margin-bottom:16px;">Print / Save as PDF</button>
+  ${bodyHtml}
+</body>
+</html>`);
+  printWindow.document.close();
+}
+
+function printListOrEmpty(items) {
+  if (!items || !items.length) return '<p class="empty">None listed</p>';
+  return '<ul>' + items.map((item) => `<li>${escapeHtml(item)}</li>`).join('') + '</ul>';
+}
+
+function printLessonPlan(id, list) {
+  const lp = list.find((p) => p.id === id);
+  if (!lp) return;
+
+  const cls = classesCache.find((c) => c.id === lp.classId);
+  const title = `Lesson Plan - ${lp.subject || ""} - ${lp.term || ""}`;
+
+  const bodyHtml = `
+    <h1>${escapeHtml(lp.subject || "Lesson Plan")}</h1>
+    <div class="meta">
+      ${escapeHtml(cls ? cls.name : "")} &middot;
+      ${escapeHtml(lp.term || "")}${lp.week ? " &middot; Week " + escapeHtml(String(lp.week)) : ""}${lp.date ? " &middot; " + escapeHtml(lp.date) : ""}
+    </div>
+    <h2>Strand / Sub-strand</h2>
+    <p>${escapeHtml(lp.strand || "—")}${lp.subStrand ? " / " + escapeHtml(lp.subStrand) : ""}</p>
+    <h2>Learning Objectives</h2>
+    ${printListOrEmpty(lp.objectives)}
+    <h2>Key Inquiry Questions</h2>
+    ${printListOrEmpty(lp.keyInquiryQuestions)}
+    <h2>Lesson Activities</h2>
+    ${printListOrEmpty(lp.lessonActivities)}
+    <h2>Resources</h2>
+    ${printListOrEmpty(lp.resources)}
+    <h2>Assessment Method</h2>
+    <p>${lp.assessmentMethod ? escapeHtml(lp.assessmentMethod) : '<span class="empty">Not specified</span>'}</p>
+  `;
+
+  openPrintWindow(title, bodyHtml);
+}
+
+function printHomework(id, list) {
+  const hw = list.find((h) => h.id === id);
+  if (!hw) return;
+
+  const cls = classesCache.find((c) => c.id === hw.classId);
+  const title = `Homework - ${hw.subject || ""}`;
+
+  const bodyHtml = `
+    <h1>${escapeHtml(hw.subject || "Homework")}</h1>
+    <div class="meta">
+      ${escapeHtml(cls ? cls.name : "")}${hw.dueDate ? " &middot; Due " + escapeHtml(hw.dueDate) : ""}
+    </div>
+    <h2>Instructions</h2>
+    <p>${escapeHtml(hw.instructions || "")}</p>
+    <h2>Materials Needed</h2>
+    ${printListOrEmpty(hw.materials)}
+  `;
+
+  openPrintWindow(title, bodyHtml);
 }
 
 // ---------- Utils ----------
