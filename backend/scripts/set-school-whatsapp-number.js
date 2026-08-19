@@ -27,21 +27,21 @@ async function main() {
 
   const db = admin.firestore();
 
-  const churchesSnap = await db.collection('schools').get();
-  if (churchesSnap.empty) {
+  const schoolsSnap = await db.collection('schools').get();
+  if (schoolsSnap.empty) {
     console.error('No schools found. Run scripts/create-first-admin.js first.');
     process.exit(1);
   }
 
   console.log('Existing schools:');
-  churchesSnap.docs.forEach((doc) => {
+  schoolsSnap.docs.forEach((doc) => {
     console.log(`  - ${doc.id}  (${doc.data().name})`);
   });
 
   const schoolId = (await ask('\nChurch ID to update: ')).trim();
-  const churchDoc = await db.collection('schools').doc(schoolId).get();
+  const schoolDoc = await db.collection('schools').doc(schoolId).get();
 
-  if (!churchDoc.exists) {
+  if (!schoolDoc.exists) {
     console.error(`No school found with ID "${schoolId}".`);
     process.exit(1);
   }
@@ -62,7 +62,7 @@ async function main() {
     whatsappConnectedAt: admin.firestore.FieldValue.serverTimestamp(),
   });
 
-  console.log(`\n✓ ${churchDoc.data().name} is now connected to WhatsApp number ${displayNumber || phoneNumberId}`);
+  console.log(`\n✓ ${schoolDoc.data().name} is now connected to WhatsApp number ${displayNumber || phoneNumberId}`);
   console.log('  Level 3 (automated broadcast) will now work for this school,');
   console.log('  as long as the message template is approved.');
 

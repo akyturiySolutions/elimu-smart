@@ -27,8 +27,8 @@ router.post('/class/:classId', requireAuth, blockReadOnlyRoles, requireOwnClass(
       return res.status(400).json({ error: 'message is required' });
     }
 
-    const churchDoc = await db().collection('schools').doc(schoolId).get();
-    const phoneNumberId = churchDoc.data()?.whatsappPhoneNumberId;
+    const schoolDoc = await db().collection('schools').doc(schoolId).get();
+    const phoneNumberId = schoolDoc.data()?.whatsappPhoneNumberId;
 
     if (!phoneNumberId) {
       return res.status(400).json({

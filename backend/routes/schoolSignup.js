@@ -37,12 +37,12 @@ async function findAvailableChurchId(baseSlug) {
   }
 }
 
-// POST /api/school-signup/register  { churchName, email, password }
+// POST /api/school-signup/register  { schoolName, email, password }
 router.post('/register', async (req, res) => {
   try {
-    const { churchName, email, password } = req.body;
+    const { schoolName, email, password } = req.body;
 
-    if (!churchName || !churchName.trim()) {
+    if (!schoolName || !schoolName.trim()) {
       return res.status(400).json({ error: 'School name is required' });
     }
     if (!email || !password) {
@@ -52,7 +52,7 @@ router.post('/register', async (req, res) => {
       return res.status(400).json({ error: 'Password must be at least 6 characters' });
     }
 
-    const baseSlug = slugify(churchName);
+    const baseSlug = slugify(schoolName);
     const schoolId = await findAvailableChurchId(baseSlug);
 
     // Create the Firebase Auth account first - if the email is already
@@ -69,7 +69,7 @@ router.post('/register', async (req, res) => {
     }
 
     await db().collection('schools').doc(schoolId).set({
-      name: churchName.trim(),
+      name: schoolName.trim(),
       createdAt: admin.firestore.FieldValue.serverTimestamp(),
       createdVia: 'self-service-signup',
     });
@@ -79,7 +79,7 @@ router.post('/register', async (req, res) => {
       role: 'admin',
     });
 
-    res.json({ success: true, schoolId: schoolId, churchName: churchName.trim() });
+    res.json({ success: true, schoolId: schoolId, schoolName: schoolName.trim() });
   } catch (err) {
     console.error('School registration failed:', err.message);
     res.status(500).json({ error: 'Failed to register your school. Please try again.' });

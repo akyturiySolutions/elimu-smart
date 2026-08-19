@@ -11,12 +11,12 @@
 // IMPORTANT: WhatsApp only allows free-form text messages to a user within
 // a 24-hour window after that user last messaged your number. Outside that
 // window (the normal case for a "send reminder" broadcast), you MUST use a
-// pre-approved message template - e.g. "cellconnect_announcement" with a
+// pre-approved message template - e.g. "elimu_smart_announcement" with a
 // single {{1}} body variable.
 
 const GRAPH_VERSION = 'v21.0';
 const ACCESS_TOKEN = process.env.WHATSAPP_ACCESS_TOKEN;
-const TEMPLATE_NAME = process.env.WHATSAPP_TEMPLATE_NAME || 'cellconnect_announcement';
+const TEMPLATE_NAME = process.env.WHATSAPP_TEMPLATE_NAME || 'elimu_smart_announcement';
 const TEMPLATE_LANG = process.env.WHATSAPP_TEMPLATE_LANG || 'en';
 
 function normalizePhone(phone) {
