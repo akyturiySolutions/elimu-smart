@@ -177,6 +177,17 @@
   }
   .attend-row input[type="checkbox"] { width: auto; margin-right: 10px; accent-color: var(--sage); }
 
+  /* Roll call scrolls after ~8 rows so a large class doesn't push the
+     Save/Print buttons far down the page. */
+  #attendanceList {
+    max-height: 340px;
+    overflow-y: auto;
+    border: 1px solid var(--line);
+    border-radius: 8px;
+    padding: 0 8px;
+    margin-bottom: 12px;
+  }
+
   .absent-row {
     display: flex; justify-content: space-between; align-items: center;
     padding: 8px 4px; border-bottom: 1px solid var(--line);
@@ -334,7 +345,8 @@
 
   <div class="card" id="addParentCard">
     <h2>Add Parent</h2>
-    <input id="parentName" placeholder="Full name">
+    <input id="parentChildName" placeholder="Child's full name">
+    <input id="parentName" placeholder="Parent/guardian full name">
     <input id="parentPhone" placeholder="Phone (e.g. 07XXXXXXXX)">
     <input id="parentWhatsapp" placeholder="WhatsApp number (leave blank to use phone)">
     <select id="parentClass"><option value="">-- No Class --</option></select>
@@ -361,7 +373,7 @@ Jane Wanjiru, 0733987654
     <button onclick="filterParents()">Search</button>
     <button onclick="clearParentSearch()" style="background:#888;">Clear</button>
     <div class="table-wrap parents-scroll"><table>
-      <thead><tr><th>Name</th><th>Phone</th><th>Class</th><th>Actions</th></tr></thead>
+      <thead><tr><th>Child</th><th>Parent</th><th>Phone</th><th>Class</th><th>Actions</th></tr></thead>
       <tbody id="parentsTable"></tbody>
     </table></div>
   </div>
@@ -406,6 +418,7 @@ Jane Wanjiru, 0733987654
     <input id="attendanceDate" type="date">
     <div id="attendanceList"></div>
     <button id="saveAttendanceBtn" onclick="saveAttendance()">Save Attendance</button>
+    <button onclick="printAttendance()" style="background:#888;">Print / Save as PDF</button>
     <p id="attendanceStatus" style="font-size:13px;"></p>
   </div>
 
@@ -545,6 +558,6 @@ Jane Wanjiru, 0733987654
 </div>
 
 <script type="module" src="/js/firebase-config.js"></script>
-<script type="module" src="/js/admin.js?v=2026-08-18-tabbed-ui"></script>
+<script type="module" src="/js/admin.js?v=2026-08-19-roll-call"></script>
 </body>
 </html>

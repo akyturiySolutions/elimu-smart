@@ -62,7 +62,7 @@ router.get('/:id', requireAuth, async (req, res) => {
 // POST /api/parents  - create (admin: any class. teacher: only their own)
 router.post('/', requireAuth, blockReadOnlyRoles, async (req, res) => {
   try {
-    const { name, phone, whatsappNumber, classId, joinedDate, notes } = req.body;
+    const { name, phone, whatsappNumber, classId, joinedDate, notes, childName } = req.body;
 
     if (!name || !phone) {
       return res.status(400).json({ error: 'name and phone are required' });
@@ -74,6 +74,7 @@ router.post('/', requireAuth, blockReadOnlyRoles, async (req, res) => {
 
     const parentData = {
       name,
+      childName: childName || '', // the pupil's name - what turns the class list into an actual roll call
       phone,
       // Defaults to phone if not set separately - most parents use the same
       // number for calls/SMS and WhatsApp, but this lets you override.
@@ -111,7 +112,7 @@ router.put('/:id', requireAuth, blockReadOnlyRoles, async (req, res) => {
       return res.status(403).json({ error: 'Teachers can only update parents in their own class' });
     }
 
-    const { name, phone, whatsappNumber, whatsappStatus, classId, joinedDate, notes } = req.body;
+    const { name, phone, whatsappNumber, whatsappStatus, classId, joinedDate, notes, childName } = req.body;
 
     // A teacher moving a parent OUT of their own class would effectively let
     // them edit a parent they'd lose visibility of - block cross-class moves
@@ -122,6 +123,7 @@ router.put('/:id', requireAuth, blockReadOnlyRoles, async (req, res) => {
 
     const updates = {};
     if (name !== undefined) updates.name = name;
+    if (childName !== undefined) updates.childName = childName;
     if (phone !== undefined) updates.phone = phone;
     if (whatsappNumber !== undefined) updates.whatsappNumber = whatsappNumber;
     if (whatsappStatus !== undefined) updates.whatsappStatus = whatsappStatus;

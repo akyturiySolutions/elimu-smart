@@ -10,7 +10,7 @@ import {
 // Printed to the console on every page load - the fastest way to check
 // "is my latest deploy actually live?" without digging through DevTools
 // Network tab. Just open the console after a deploy and compare.
-const BUILD_VERSION = "2026-08-18-tabbed-ui";
+const BUILD_VERSION = "2026-08-19-roll-call";
 console.log("Elimu Smart admin.js build:", BUILD_VERSION);
 
 let currentToken = null;
@@ -297,7 +297,7 @@ function renderParentsTable(list) {
 
   if (list.length === 0) {
     const tr = document.createElement("tr");
-    tr.innerHTML = "<td colspan='4' style='color:var(--ink-soft);'>No parents match.</td>";
+    tr.innerHTML = "<td colspan='5' style='color:var(--ink-soft);'>No parents match.</td>";
     tbody.appendChild(tr);
     return;
   }
@@ -325,7 +325,7 @@ function renderParentsTable(list) {
     const headerTr = document.createElement("tr");
     headerTr.className = "class-group-header";
     headerTr.innerHTML =
-      "<td colspan='4'>" + escapeHtml(groupName) + " (" + groupMembers.length + ")</td>";
+      "<td colspan='5'>" + escapeHtml(groupName) + " (" + groupMembers.length + ")</td>";
     tbody.appendChild(headerTr);
 
     groupMembers.forEach((m) => {
@@ -336,6 +336,7 @@ function renderParentsTable(list) {
 
       const tr = document.createElement("tr");
       tr.innerHTML = `
+        <td>${escapeHtml(m.childName || "—")}</td>
         <td>${escapeHtml(m.name)}</td>
         <td>${escapeHtml(m.phone)}</td>
         <td>${escapeHtml(groupName)}</td>
@@ -370,26 +371,28 @@ window.clearParentSearch = function () {
 };
 
 window.addParent = async function () {
+  const childName = document.getElementById("parentChildName").value.trim();
   const name = document.getElementById("parentName").value.trim();
   const phone = document.getElementById("parentPhone").value.trim();
   const whatsappNumber = document.getElementById("parentWhatsapp").value.trim();
   const classId = document.getElementById("parentClass").value || null;
 
   if (!name || !phone) {
-    alert("Name and phone are required");
+    alert("Parent name and phone are required");
     return;
   }
 
   try {
     await api("/parents", {
       method: "POST",
-      body: JSON.stringify({ name, phone, whatsappNumber: whatsappNumber || undefined, classId }),
+      body: JSON.stringify({ childName, name, phone, whatsappNumber: whatsappNumber || undefined, classId }),
     });
   } catch (err) {
     alert("Couldn't add parent: " + err.message);
     return;
   }
 
+  document.getElementById("parentChildName").value = "";
   document.getElementById("parentName").value = "";
   document.getElementById("parentPhone").value = "";
   document.getElementById("parentWhatsapp").value = "";
@@ -674,7 +677,10 @@ window.loadAttendanceForm = async function () {
     const checked = existing.records && existing.records[m.id] ? "checked" : "";
     row.innerHTML = `<label style="display:flex;align-items:center;width:100%;">
       <input type="checkbox" data-parent-id="${m.id}" ${checked}>
-      ${escapeHtml(m.name)}
+      <span>
+        <strong>${escapeHtml(m.childName || "(no child name on file)")}</strong>
+        <span style="color:var(--ink-soft);font-size:13px;"> — parent: ${escapeHtml(m.name)}</span>
+      </span>
     </label>`;
     listEl.appendChild(row);
   });
@@ -734,11 +740,15 @@ window.saveAttendance = async function () {
 };
 
 // Admin/teacher dashboard feature: one row per absentee, each with its own
-// "Send Reminder" click-to-chat button (Level 2 — teacher still taps Send).
+// "Notify Parent" click-to-chat button (Level 2 — teacher still taps Send).
+// Opens a direct WhatsApp chat with that parent, prefilled with the absence
+// notice - since it's a normal 1:1 WhatsApp thread, the parent can just
+// reply in it to reach the teacher directly, no extra plumbing needed.
 function renderAbsentees(classId, classParents, recordsMap) {
   const card = document.getElementById("absenteesCard");
   const listEl = document.getElementById("absenteesList");
   const schoolClass = classesCache.find((c) => c.id === classId);
+  const date = document.getElementById("attendanceDate").value || new Date().toISOString().slice(0, 10);
 
   const absentees = classParents.filter((m) => recordsMap[m.id] === false);
 
@@ -751,15 +761,15 @@ function renderAbsentees(classId, classParents, recordsMap) {
   card.style.display = "block";
   listEl.innerHTML = "";
 
-  const reminderText = `Good evening. We missed you at today's ${schoolClass?.name || "class"} meeting. We hope you're doing well and look forward to seeing you next week. Please let us know if we can pray for you.`;
-
   absentees.forEach((m) => {
-    const waLink = buildClickToChatLink(m.whatsappNumber || m.phone, reminderText);
+    const childLabel = m.childName || "your child";
+    const absenceText = `Good afternoon. This is to inform you that ${childLabel} was marked absent from ${schoolClass?.name || "class"} today, ${date}. If this is unexpected or your child is unwell, please reply to this message and let the class teacher know — we hope all is well.`;
+    const waLink = buildClickToChatLink(m.whatsappNumber || m.phone, absenceText);
     const row = document.createElement("div");
     row.className = "absent-row";
     row.innerHTML = `
-      <span>${escapeHtml(m.name)}</span>
-      <a href="${waLink}" target="_blank" rel="noopener"><button class="wa-btn" type="button">Send WhatsApp Reminder</button></a>`;
+      <span><strong>${escapeHtml(m.childName || "(no child name on file)")}</strong> — parent: ${escapeHtml(m.name)}</span>
+      <a href="${waLink}" target="_blank" rel="noopener"><button class="wa-btn" type="button">Notify Parent</button></a>`;
     listEl.appendChild(row);
   });
 }
@@ -1413,6 +1423,62 @@ function printListOrEmpty(items) {
   if (!items || !items.length) return '<p class="empty">None listed</p>';
   return '<ul>' + items.map((item) => `<li>${escapeHtml(item)}</li>`).join('') + '</ul>';
 }
+
+// Prints the current on-screen roll call (whatever's checked/unchecked right
+// now in #attendanceList) with clear Present/Absent marking per child.
+window.printAttendance = function () {
+  const classId = document.getElementById("attendanceClass").value;
+  if (!classId) {
+    alert("Choose a class first.");
+    return;
+  }
+
+  const schoolClass = classesCache.find((c) => c.id === classId);
+  const date = document.getElementById("attendanceDate").value || new Date().toISOString().slice(0, 10);
+  const checkboxes = document.querySelectorAll("#attendanceList input[type='checkbox']");
+
+  const rows = Array.from(checkboxes).map((cb) => {
+    const parent = parentsCache.find((p) => p.id === cb.dataset.parentId);
+    return {
+      childName: parent?.childName || "(no child name on file)",
+      parentName: parent?.name || "",
+      present: cb.checked,
+    };
+  });
+
+  if (rows.length === 0) {
+    alert("No roll call to print for this class yet.");
+    return;
+  }
+
+  const presentCount = rows.filter((r) => r.present).length;
+
+  const bodyHtml = `
+    <h1>${escapeHtml(schoolClass ? schoolClass.name : "Class")} — Attendance</h1>
+    <div class="meta">${escapeHtml(date)} &middot; ${presentCount}/${rows.length} present</div>
+    <table style="width:100%;border-collapse:collapse;margin-top:12px;">
+      <thead>
+        <tr style="border-bottom:2px solid #2b2b2b;">
+          <th style="text-align:left;padding:6px 4px;">Child</th>
+          <th style="text-align:left;padding:6px 4px;">Parent</th>
+          <th style="text-align:left;padding:6px 4px;">Status</th>
+        </tr>
+      </thead>
+      <tbody>
+        ${rows.map((r) => `
+          <tr style="border-bottom:1px solid #ddd;">
+            <td style="padding:6px 4px;">${escapeHtml(r.childName)}</td>
+            <td style="padding:6px 4px;">${escapeHtml(r.parentName)}</td>
+            <td style="padding:6px 4px;font-weight:700;color:${r.present ? '#2F5A3D' : '#7E362C'};">
+              ${r.present ? 'PRESENT' : 'ABSENT'}
+            </td>
+          </tr>`).join('')}
+      </tbody>
+    </table>
+  `;
+
+  openPrintWindow(`Attendance — ${schoolClass ? schoolClass.name : "Class"} — ${date}`, bodyHtml);
+};
 
 function printLessonPlan(id, list) {
   const lp = list.find((p) => p.id === id);
