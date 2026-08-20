@@ -10,7 +10,7 @@ import {
 // Printed to the console on every page load - the fastest way to check
 // "is my latest deploy actually live?" without digging through DevTools
 // Network tab. Just open the console after a deploy and compare.
-const BUILD_VERSION = "2026-08-19-roll-call";
+const BUILD_VERSION = "2026-08-20-edit-parent";
 console.log("Elimu Smart admin.js build:", BUILD_VERSION);
 
 let currentToken = null;
@@ -342,9 +342,11 @@ function renderParentsTable(list) {
         <td>${escapeHtml(groupName)}</td>
         <td class="actions">
           <a href="${waLink}" target="_blank" rel="noopener"><button class="wa-btn" type="button">Message</button></a>
+          <button class="edit-parent-btn" data-id="${m.id}">Edit</button>
           <button class="del" data-id="${m.id}">Delete</button>
         </td>`;
       tr.querySelector(".del").addEventListener("click", () => deleteMember(m.id));
+      tr.querySelector(".edit-parent-btn").addEventListener("click", () => startEditParent(m.id));
       tbody.appendChild(tr);
     });
   });
@@ -370,6 +372,37 @@ window.clearParentSearch = function () {
   renderParentsTable(parentsCache);
 };
 
+let editingParentId = null;
+
+function startEditParent(id) {
+  const parent = parentsCache.find((p) => p.id === id);
+  if (!parent) return;
+
+  editingParentId = id;
+  document.getElementById("parentChildName").value = parent.childName || "";
+  document.getElementById("parentName").value = parent.name || "";
+  document.getElementById("parentPhone").value = parent.phone || "";
+  document.getElementById("parentWhatsapp").value = parent.whatsappNumber || "";
+  document.getElementById("parentClass").value = parent.classId || "";
+
+  document.getElementById("addParentTitle").textContent = "Edit Parent";
+  document.getElementById("addParentBtn").textContent = "Save Changes";
+  document.getElementById("cancelEditParentBtn").style.display = "inline-block";
+  document.getElementById("addParentCard").scrollIntoView({ behavior: "smooth" });
+}
+
+window.cancelEditParent = function () {
+  editingParentId = null;
+  document.getElementById("parentChildName").value = "";
+  document.getElementById("parentName").value = "";
+  document.getElementById("parentPhone").value = "";
+  document.getElementById("parentWhatsapp").value = "";
+  document.getElementById("parentClass").value = "";
+  document.getElementById("addParentTitle").textContent = "Add Parent";
+  document.getElementById("addParentBtn").textContent = "Add Parent";
+  document.getElementById("cancelEditParentBtn").style.display = "none";
+};
+
 window.addParent = async function () {
   const childName = document.getElementById("parentChildName").value.trim();
   const name = document.getElementById("parentName").value.trim();
@@ -383,19 +416,23 @@ window.addParent = async function () {
   }
 
   try {
-    await api("/parents", {
-      method: "POST",
-      body: JSON.stringify({ childName, name, phone, whatsappNumber: whatsappNumber || undefined, classId }),
-    });
+    if (editingParentId) {
+      await api(`/parents/${editingParentId}`, {
+        method: "PUT",
+        body: JSON.stringify({ childName, name, phone, whatsappNumber: whatsappNumber || phone, classId }),
+      });
+    } else {
+      await api("/parents", {
+        method: "POST",
+        body: JSON.stringify({ childName, name, phone, whatsappNumber: whatsappNumber || undefined, classId }),
+      });
+    }
   } catch (err) {
-    alert("Couldn't add parent: " + err.message);
+    alert("Couldn't save parent: " + err.message);
     return;
   }
 
-  document.getElementById("parentChildName").value = "";
-  document.getElementById("parentName").value = "";
-  document.getElementById("parentPhone").value = "";
-  document.getElementById("parentWhatsapp").value = "";
+  window.cancelEditParent();
   await loadParents();
 };
 

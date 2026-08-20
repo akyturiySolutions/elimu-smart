@@ -344,13 +344,14 @@
   </div>
 
   <div class="card" id="addParentCard">
-    <h2>Add Parent</h2>
+    <h2 id="addParentTitle">Add Parent</h2>
     <input id="parentChildName" placeholder="Child's full name">
     <input id="parentName" placeholder="Parent/guardian full name">
     <input id="parentPhone" placeholder="Phone (e.g. 07XXXXXXXX)">
     <input id="parentWhatsapp" placeholder="WhatsApp number (leave blank to use phone)">
     <select id="parentClass"><option value="">-- No Class --</option></select>
-    <button onclick="addParent()">Add Parent</button>
+    <button id="addParentBtn" onclick="addParent()">Add Parent</button>
+    <button id="cancelEditParentBtn" onclick="cancelEditParent()" style="background:#888;display:none;">Cancel Edit</button>
   </div>
 
   <div class="card" id="bulkAddParentCard">
@@ -558,6 +559,6 @@ Jane Wanjiru, 0733987654
 </div>
 
 <script type="module" src="/js/firebase-config.js"></script>
-<script type="module" src="/js/admin.js?v=2026-08-19-roll-call"></script>
+<script type="module" src="/js/admin.js?v=2026-08-20-edit-parent"></script>
 </body>
 </html>
