@@ -267,8 +267,21 @@ router.post('/:id/publish', requireAuth, blockReadOnlyRoles, async (req, res) =>
       .collection('schools').doc(req.schoolId)
       .collection('parents').where('classId', '==', homework.classId).get();
 
+    // Include a direct link to the original scanned photo (Firebase Storage
+    // signed URL) in the text message body, rather than sending it as an
+    // actual WhatsApp image attachment. This deliberately avoids needing a
+    // second Meta-approved template with an image header - the message uses
+    // the SAME already-approved text template as every other broadcast.
+    // Parent taps the link and sees the note (diagrams included) in their
+    // browser. No extra Meta review, no extra cost, no new dependency.
+    //
+    // sendHomeworkImageMessage() in services/whatsapp.js sends a true inline
+    // WhatsApp image instead of a link, and is kept ready to use if a proper
+    // image-header template ever gets approved later - just swap which
+    // branch runs below.
     const messageBody = `Homework - ${homework.subject || 'Class'}: ${homework.instructions}` +
-      (homework.dueDate ? `\nDue: ${homework.dueDate}` : '');
+      (homework.dueDate ? `\nDue: ${homework.dueDate}` : '') +
+      (homework.originalImageUrl ? `\nView the actual note (with any diagrams): ${homework.originalImageUrl}` : '');
 
     const results = [];
     for (const parentDoc of parentsSnap.docs) {
@@ -277,6 +290,7 @@ router.post('/:id/publish', requireAuth, blockReadOnlyRoles, async (req, res) =>
         results.push({ parentId: parentDoc.id, success: false, error: 'No phone on file' });
         continue;
       }
+
       const result = await sendTemplateMessage(phoneNumberId, parent.phone, messageBody);
       results.push({ parentId: parentDoc.id, name: parent.name, ...result });
       await sleep(150);

@@ -18,6 +18,12 @@ const GRAPH_VERSION = 'v21.0';
 const ACCESS_TOKEN = process.env.WHATSAPP_ACCESS_TOKEN;
 const TEMPLATE_NAME = process.env.WHATSAPP_TEMPLATE_NAME || 'elimu_smart_announcement';
 const TEMPLATE_LANG = process.env.WHATSAPP_TEMPLATE_LANG || 'en';
+// Separate template for homework-with-photo sends. This MUST be created and
+// approved in Meta Business Manager first - a template with an IMAGE header
+// component plus one {{1}} body text variable. Text-only templates cannot
+// be reused for this; Meta requires the header type to match what you send.
+// See docs/WHATSAPP_SETUP_CHECKLIST.md for the approval steps.
+const HOMEWORK_IMAGE_TEMPLATE_NAME = process.env.WHATSAPP_HOMEWORK_IMAGE_TEMPLATE_NAME || 'elimu_smart_homework_photo';
 
 function normalizePhone(phone) {
   // Expects Kenyan numbers like 07XXXXXXXX or already-international 2547XXXXXXXX
@@ -99,4 +105,53 @@ async function sendSessionText(phoneNumberId, toPhone, bodyText) {
   return { to, success: true, messageId: data.messages?.[0]?.id };
 }
 
-module.exports = { sendTemplateMessage, sendSessionText, normalizePhone };
+// Sends the homework's original photo as the template's image header, with
+// the instructions text as the body variable - so a parent sees the actual
+// note (diagrams, drawings, everything) rather than a text-only summary of it.
+// imageUrl must be a publicly reachable URL (the signed Storage URL from
+// services/storage.js works for this).
+async function sendHomeworkImageMessage(phoneNumberId, toPhone, imageUrl, bodyText) {
+  if (!phoneNumberId) {
+    return { to: toPhone, success: false, error: 'This school has no WhatsApp number configured yet' };
+  }
+
+  const to = normalizePhone(toPhone);
+  const url = `https://graph.facebook.com/${GRAPH_VERSION}/${phoneNumberId}/messages`;
+
+  const payload = {
+    messaging_product: 'whatsapp',
+    to,
+    type: 'template',
+    template: {
+      name: HOMEWORK_IMAGE_TEMPLATE_NAME,
+      language: { code: TEMPLATE_LANG },
+      components: [
+        {
+          type: 'header',
+          parameters: [{ type: 'image', image: { link: imageUrl } }],
+        },
+        {
+          type: 'body',
+          parameters: [{ type: 'text', text: bodyText }],
+        },
+      ],
+    },
+  };
+
+  const res = await fetch(url, {
+    method: 'POST',
+    headers: {
+      Authorization: `Bearer ${ACCESS_TOKEN}`,
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify(payload),
+  });
+
+  const data = await res.json();
+  if (!res.ok) {
+    return { to, success: false, error: data.error?.message || 'Send failed' };
+  }
+  return { to, success: true, messageId: data.messages?.[0]?.id };
+}
+
+module.exports = { sendTemplateMessage, sendSessionText, sendHomeworkImageMessage, normalizePhone };
