@@ -1,10 +1,14 @@
 // backend/services/aiStructureGemini.js
-// Uses Gemini 2.0 Flash to turn raw (possibly messy) OCR text into structured
+// Uses Gemini to turn raw (possibly messy) OCR text into structured
 // homework fields the teacher can review/edit before publishing - the
-// "Gemini 2.0 Flash for other AI tasks" half of [[elimu]]'s AI/OCR flow.
+// "Gemini for other AI tasks" half of [[elimu]]'s AI/OCR flow.
 
 const GEMINI_API_KEY = process.env.GEMINI_API_KEY;
-const MODEL = 'gemini-2.0-flash';
+// NOTE: Google deprecates Gemini model versions periodically - if this
+// starts failing with "model no longer available", the error message
+// itself names the current replacement model to switch to. Keep this in
+// sync with services/ocrGemini.js's MODEL constant.
+const MODEL = 'gemini-3.6-flash';
 
 const PROMPT_INSTRUCTIONS = `You turn a raw, possibly messy transcription of a teacher's handwritten homework note into structured fields for a school app.
 The text may contain [unclear] markers where the original handwriting couldn't be read - leave those as-is, don't guess what they say.

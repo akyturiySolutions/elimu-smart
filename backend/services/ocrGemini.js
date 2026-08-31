@@ -1,10 +1,10 @@
 // backend/services/ocrGemini.js
-// Uses Gemini 2.0 Flash (vision) to transcribe a photo of a handwritten
-// homework note - a Gemini-only alternative to services/ocrClaude.js, so
-// the whole AI/OCR pipeline can run on Gemini's free tier without any
-// Anthropic billing commitment. Same {text, confidence} contract as
-// ocrClaude.js, so routes/homework.js only needs to swap which service it
-// imports - no other route logic changes.
+// Uses Gemini (vision) to transcribe a photo of a handwritten homework note
+// - a Gemini-only alternative to services/ocrClaude.js, so the whole
+// AI/OCR pipeline can run on Gemini's free tier without any Anthropic
+// billing commitment. Same {text, confidence} contract as ocrClaude.js, so
+// routes/homework.js only needs to swap which service it imports - no
+// other route logic changes.
 //
 // Trade-off worth knowing (see [[elimu]] notes): this is a smaller/cheaper
 // model than Claude Sonnet for vision tasks, so handwriting transcription
@@ -18,7 +18,10 @@
 //     error and asks the teacher to retake the photo.
 
 const GEMINI_API_KEY = process.env.GEMINI_API_KEY;
-const MODEL = 'gemini-2.0-flash';
+// NOTE: Google deprecates Gemini model versions periodically - if this
+// starts failing with "model no longer available", the error message
+// itself names the current replacement model to switch to.
+const MODEL = 'gemini-3.6-flash';
 
 const PROMPT = `You transcribe photos of handwritten homework notes written by teachers for a school app.
 Transcribe the text as literally as possible - do not summarize, correct spelling, or restructure it.
