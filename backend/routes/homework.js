@@ -3,16 +3,20 @@
 // Firestore path: schools/{schoolId}/homework/{homeworkId}
 //
 // Flow (as designed for [[elimu]]):
-//   1. Teacher photographs a handwritten note -> POST /ocr (Claude transcribes)
+//   1. Teacher photographs a handwritten note -> POST /ocr (Gemini or Claude
+//      vision transcribes it - see services/ocrGemini.js / ocrClaude.js)
 //   2. POST /structure turns the raw OCR text into subject/instructions/
-//      dueDate/materials (Gemini 2.0 Flash) - teacher reviews/edits before
-//      anything is saved; nothing is auto-published at this stage.
+//      dueDate/materials (Gemini) - teacher reviews/edits before anything
+//      is saved; nothing is auto-published at this stage.
 //   3. POST / creates the homework record as a draft. lessonPlanId is
 //      required and must point to a lesson plan with status 'approved' -
 //      enforces the same gate as the Firestore rules.
-//   4. POST /:id/publish sends it to the class's parent WhatsApp group via
-//      the same sendTemplateMessage path broadcast.js uses, and flips
-//      status to 'published'.
+//   4. POST /:id/publish marks it published and returns a click-to-chat
+//      WhatsApp link per parent (Level 2 - teacher still taps Send on
+//      each). Deliberately NOT using the WhatsApp Business API here - no
+//      Meta approval, no per-message cost, no phone-number setup required.
+//      services/whatsapp.js's sendTemplateMessage (Level 3, fully
+//      automated) stays available for later if/when that setup is worth it.
 //
 // Role rules: teacher only (create/edit/publish/delete, own class only).
 // Admin can read everything for oversight, same as lessonPlans.js.
@@ -27,14 +31,14 @@ const { requireAuth, blockReadOnlyRoles, requireOwnClass } = require('../middlew
 // require('../services/ocrClaude') once ready to compare/switch.
 const { transcribeHomeworkImage } = require('../services/ocrGemini');
 const { structureHomeworkText } = require('../services/aiStructureGemini');
-const { sendTemplateMessage } = require('../services/whatsapp');
 const { uploadHomeworkImage } = require('../services/storage');
 
 const router = express.Router();
 const db = () => admin.firestore();
 
-function sleep(ms) {
-  return new Promise((resolve) => setTimeout(resolve, ms));
+function buildClickToChatLink(phone, text) {
+  const digits = String(phone || '').replace(/\D/g, '');
+  return `https://wa.me/${digits}?text=${encodeURIComponent(text)}`;
 }
 
 // POST /api/homework/ocr  { imageBase64, mediaType }
@@ -158,9 +162,8 @@ router.post('/', requireAuth, blockReadOnlyRoles, async (req, res) => {
     }
 
     // Photo goes to Firebase Storage, not inline in the Firestore document -
-    // avoids the 1MB Firestore document limit (a real phone photo, once
-    // base64-inflated, can exceed that on its own) and keeps homework list
-    // reads from dragging full images along with them every time.
+    // avoids the 1MB Firestore document limit and keeps homework list reads
+    // from dragging full images along with them every time.
     let originalImageUrl = null;
     let originalImageStoragePath = null;
     if (sourceType === 'ocr' && originalImageBase64) {
@@ -240,8 +243,9 @@ router.put('/:id', requireAuth, blockReadOnlyRoles, async (req, res) => {
 });
 
 // POST /api/homework/:id/publish - teacher only, own draft homework.
-// Sends the instructions to every parent in the class via WhatsApp
-// (same 1:1 template-send pattern as broadcast.js), then flips to 'published'.
+// Marks it published and returns a click-to-chat WhatsApp link per parent
+// (Level 2 - no WhatsApp Business API call, no Meta setup, no per-message
+// cost). The teacher taps Send on each parent's link from the frontend.
 router.post('/:id/publish', requireAuth, blockReadOnlyRoles, async (req, res) => {
   try {
     if (req.role !== 'teacher') {
@@ -260,48 +264,13 @@ router.post('/:id/publish', requireAuth, blockReadOnlyRoles, async (req, res) =>
       return res.status(400).json({ error: 'Only a draft can be published' });
     }
 
-    const schoolDoc = await db().collection('schools').doc(req.schoolId).get();
-    const phoneNumberId = schoolDoc.data()?.whatsappPhoneNumberId;
-    if (!phoneNumberId) {
-      return res.status(400).json({
-        error: 'No WhatsApp number is set up for this school yet. Run scripts/set-school-whatsapp-number.js first.',
-      });
-    }
-
     const parentsSnap = await db()
       .collection('schools').doc(req.schoolId)
       .collection('parents').where('classId', '==', homework.classId).get();
 
-    // Include a direct link to the original scanned photo (Firebase Storage
-    // signed URL) in the text message body, rather than sending it as an
-    // actual WhatsApp image attachment. This deliberately avoids needing a
-    // second Meta-approved template with an image header - the message uses
-    // the SAME already-approved text template as every other broadcast.
-    // Parent taps the link and sees the note (diagrams included) in their
-    // browser. No extra Meta review, no extra cost, no new dependency.
-    //
-    // sendHomeworkImageMessage() in services/whatsapp.js sends a true inline
-    // WhatsApp image instead of a link, and is kept ready to use if a proper
-    // image-header template ever gets approved later - just swap which
-    // branch runs below.
     const messageBody = `Homework - ${homework.subject || 'Class'}: ${homework.instructions}` +
       (homework.dueDate ? `\nDue: ${homework.dueDate}` : '') +
       (homework.originalImageUrl ? `\nView the actual note (with any diagrams): ${homework.originalImageUrl}` : '');
-
-    const results = [];
-    for (const parentDoc of parentsSnap.docs) {
-      const parent = parentDoc.data();
-      if (!parent.phone) {
-        results.push({ parentId: parentDoc.id, success: false, error: 'No phone on file' });
-        continue;
-      }
-
-      const result = await sendTemplateMessage(phoneNumberId, parent.phone, messageBody);
-      results.push({ parentId: parentDoc.id, name: parent.name, ...result });
-      await sleep(150);
-    }
-
-    const successCount = results.filter((r) => r.success).length;
 
     await ref.update({
       status: 'published',
@@ -309,7 +278,21 @@ router.post('/:id/publish', requireAuth, blockReadOnlyRoles, async (req, res) =>
       updatedAt: admin.firestore.FieldValue.serverTimestamp(),
     });
 
-    res.json({ success: true, id: req.params.id, status: 'published', sent: successCount, failed: results.length - successCount, results });
+    const parents = parentsSnap.docs
+      .map((d) => {
+        const p = d.data();
+        const phone = p.whatsappNumber || p.phone;
+        return {
+          id: d.id,
+          name: p.name,
+          childName: p.childName || '',
+          phone,
+          waLink: phone ? buildClickToChatLink(phone, messageBody) : null,
+        };
+      })
+      .filter((p) => p.waLink);
+
+    res.json({ success: true, id: req.params.id, status: 'published', messageBody, parents });
   } catch (err) {
     console.error('Publish homework failed:', err.message);
     res.status(500).json({ error: 'Failed to publish homework' });

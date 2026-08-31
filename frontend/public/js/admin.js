@@ -5,7 +5,6 @@ import {
   signOut,
   onAuthStateChanged,
 } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-auth.js";
-
 // BUILD_VERSION: bump this string every time you deploy a real change.
 // Printed to the console on every page load - the fastest way to check
 // "is my latest deploy actually live?" without digging through DevTools
@@ -1329,15 +1328,30 @@ window.saveHomework = async function () {
 };
 
 async function publishHomework(id) {
-  if (!confirm("Publish this homework? It will be sent to every parent in the class via WhatsApp and cannot be undone.")) return;
+  if (!confirm("Publish this homework? Once published you can't edit or delete it.")) return;
   const statusEl = document.getElementById("homeworkStatus");
   try {
     const result = await api(`/homework/${id}/publish`, { method: "POST" });
     await loadMyHomework();
-    statusEl.textContent = `Published - sent to ${result.sent} of ${result.sent + result.failed} parents.`;
+    renderHomeworkSendLinks(result.parents);
+    statusEl.textContent = "Published. Tap Send below for each parent to deliver it on WhatsApp.";
   } catch (err) {
     statusEl.textContent = "Couldn't publish: " + err.message;
   }
+}
+
+function renderHomeworkSendLinks(parents) {
+  const container = document.getElementById("homeworkSendLinks");
+  if (!container) return;
+  if (!parents || !parents.length) {
+    container.innerHTML = "<p style='font-size:13px;color:#888;'>No parents with a phone number on file for this class.</p>";
+    return;
+  }
+  container.innerHTML = parents.map((p) => `
+    <div class="absent-row">
+      <span><strong>${escapeHtml(p.childName || "(no child name)")}</strong> — parent: ${escapeHtml(p.name)}</span>
+      <a href="${p.waLink}" target="_blank" rel="noopener"><button class="wa-btn" type="button">Send</button></a>
+    </div>`).join("");
 }
 
 async function deleteHomework(id) {
