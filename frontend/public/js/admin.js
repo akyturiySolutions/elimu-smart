@@ -810,7 +810,7 @@ function renderAbsentees(classId, classParents, recordsMap) {
   });
 }
 
-// Attendance Insights: recent meeting history + parents needing a check-in
+// Attendance Insights: recent roll call history + parents needing a check-in
 // (flagged by the backend when their rate is below threshold).
 async function loadAttendanceInsights(classId) {
   const card = document.getElementById("insightsCard");
@@ -845,9 +845,10 @@ async function loadAttendanceInsights(classId) {
     }
 
     const schoolClass = classesCache.find((c) => c.id === classId);
-    const checkinText = `Hi, we've noticed you've missed a few ${schoolClass?.name || "class"} meetings lately. We hope you're doing well — please let us know if we can pray for you or support you in any way.`;
 
     flagged.forEach((r) => {
+      const childLabel = r.childName || "your child";
+      const checkinText = `Good afternoon. We've noticed ${childLabel} has missed several recent roll calls in ${schoolClass?.name || "class"}. If they've been unwell or something else is going on, please reply and let the class teacher know — we're glad to help.`;
       const waLink = buildClickToChatLink(r.whatsappNumber || r.phone, checkinText);
       const row = document.createElement("div");
       row.className = "absent-row";

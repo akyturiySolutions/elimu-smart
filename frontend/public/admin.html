@@ -462,7 +462,7 @@ Jane Wanjiru, 0733987654
 
   <div class="tab-panel" id="panel-attendance" style="display:none;">
   <div class="card">
-    <h2>Attendance</h2>
+    <h2>Class Roll Call Register</h2>
     <select id="attendanceClass" onchange="loadAttendanceForm()"><option value="">-- Choose a Class --</option></select>
     <input id="attendanceDate" type="date">
     <div id="attendanceList"></div>
@@ -472,23 +472,23 @@ Jane Wanjiru, 0733987654
   </div>
 
   <div class="card" id="absenteesCard" style="display:none;">
-    <h2>Absent This Meeting <span class="tier-badge tier-2">Level 2: Click-to-Chat</span></h2>
+    <h2>Absent From Today's Roll Call <span class="tier-badge tier-2">Level 2: Click-to-Chat</span></h2>
     <p class="hint">Review the message, then tap Send — it opens WhatsApp with the reminder ready. No copy-paste.</p>
     <div id="absenteesList"></div>
   </div>
 
   <div class="card" id="insightsCard" style="display:none;">
     <h2>Attendance Insights</h2>
-    <p class="hint">Based on the last several recorded meetings for this class.</p>
+    <p class="hint">Based on the last several recorded roll calls for this class.</p>
 
-    <h3 style="font-size:15px;margin-top:16px;">Recent Meetings</h3>
+    <h3 style="font-size:15px;margin-top:16px;">Recent Roll Calls</h3>
     <div class="table-wrap"><table>
       <thead><tr><th>Date</th><th>Present</th></tr></thead>
       <tbody id="historyTable"></tbody>
     </table></div>
 
     <h3 style="font-size:15px;margin-top:16px;">Parents Needing a Check-in <span class="tier-badge tier-2">Level 2: Click-to-Chat</span></h3>
-    <p class="hint">Flagged when attendance rate is below 50% over recent meetings (with at least 2 meetings recorded).</p>
+    <p class="hint">Flagged when attendance rate is below 50% over recent roll calls (with at least 2 roll calls recorded).</p>
     <div id="lowAttendanceList"></div>
   </div>
   </div>
