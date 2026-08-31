@@ -20,7 +20,12 @@
 const express = require('express');
 const admin = require('firebase-admin');
 const { requireAuth, blockReadOnlyRoles, requireOwnClass } = require('../middleware/auth');
-const { transcribeHomeworkImage } = require('../services/ocrClaude');
+// TEMPORARY: using Gemini-only OCR (services/ocrGemini.js) instead of Claude
+// (services/ocrClaude.js) so the full pipeline can be tested on Gemini's
+// free tier without committing to Anthropic billing yet. Same {text,
+// confidence} interface either way - swap this one line back to
+// require('../services/ocrClaude') once ready to compare/switch.
+const { transcribeHomeworkImage } = require('../services/ocrGemini');
 const { structureHomeworkText } = require('../services/aiStructureGemini');
 const { sendTemplateMessage } = require('../services/whatsapp');
 const { uploadHomeworkImage } = require('../services/storage');
@@ -35,8 +40,8 @@ function sleep(ms) {
 // POST /api/homework/ocr  { imageBase64, mediaType }
 // Teacher only. Returns { text, confidence } on success.
 // On low confidence, returns 422 so the frontend can show "retake photo"
-// instead of a mostly-blank review form - see services/ocrClaude.js for
-// the confidence heuristic.
+// instead of a mostly-blank review form - see whichever ocr*.js service is
+// currently imported above for the confidence heuristic.
 router.post('/ocr', requireAuth, blockReadOnlyRoles, async (req, res) => {
   try {
     if (req.role !== 'teacher') {
