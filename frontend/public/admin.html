@@ -4,6 +4,14 @@
 <meta charset="UTF-8">
 <title>Elimu Smart Admin</title>
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
+<link rel="manifest" href="/manifest.json">
+<meta name="theme-color" content="#2C3E6B">
+<!-- iOS home-screen support: Apple ignores the manifest for these bits,
+     so they're set explicitly here too. -->
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="default">
+<meta name="apple-mobile-web-app-title" content="Elimu Smart">
+<link rel="apple-touch-icon" href="/icons/apple-touch-icon.png">
 <style>
   @import url('https://fonts.googleapis.com/css2?family=Lora:wght@500;600;700&family=Karla:wght@400;500;600;700&display=swap');
 
@@ -303,6 +311,46 @@
     .tab-nav { gap: 2px; }
     .tab-btn { padding: 8px 10px; font-size: 13px; }
   }
+
+  /* ---- Install app banner (Android + iOS) ---- */
+  #installBanner {
+    position: fixed;
+    left: 0; right: 0; bottom: 0;
+    z-index: 999;
+    background: var(--indigo-dark);
+    color: #FAF3E7;
+    padding: 12px 16px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    font-family: 'Karla', sans-serif;
+    font-size: 14px;
+    box-shadow: 0 -2px 10px rgba(0,0,0,0.15);
+  }
+  #installBannerText { flex: 1; }
+  #installBannerActions { display: flex; align-items: center; gap: 8px; flex-shrink: 0; }
+  #installBannerBtn {
+    background: var(--ochre);
+    color: #fff;
+    border: none;
+    border-radius: 6px;
+    padding: 8px 14px;
+    font-weight: 600;
+    font-size: 13px;
+    cursor: pointer;
+  }
+  #installBannerBtn:hover { background: var(--ochre-dark); }
+  #installBannerDismiss {
+    background: transparent;
+    color: #FAF3E7;
+    border: none;
+    font-size: 16px;
+    padding: 4px 8px;
+    cursor: pointer;
+    opacity: 0.8;
+  }
+  #installBannerDismiss:hover { opacity: 1; }
 </style>
 </head>
 <body>
@@ -558,6 +606,7 @@ Jane Wanjiru, 0733987654
   </div>
 </div>
 
+<script src="/js/install-prompt.js"></script>
 <script type="module" src="/js/firebase-config.js"></script>
 <script type="module" src="/js/admin.js?v=2026-08-20-edit-parent"></script>
 </body>
