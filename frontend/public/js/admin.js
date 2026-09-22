@@ -9,7 +9,7 @@ import {
 // Printed to the console on every page load - the fastest way to check
 // "is my latest deploy actually live?" without digging through DevTools
 // Network tab. Just open the console after a deploy and compare.
-const BUILD_VERSION = "2026-08-20-edit-parent";
+const BUILD_VERSION = "2026-09-22-homework-pdf";
 console.log("Elimu Smart admin.js build:", BUILD_VERSION);
 
 let currentToken = null;
@@ -810,7 +810,7 @@ function renderAbsentees(classId, classParents, recordsMap) {
   });
 }
 
-// Attendance Insights: recent roll call history + parents needing a check-in
+// Attendance Insights: recent meeting history + parents needing a check-in
 // (flagged by the backend when their rate is below threshold).
 async function loadAttendanceInsights(classId) {
   const card = document.getElementById("insightsCard");
@@ -845,10 +845,9 @@ async function loadAttendanceInsights(classId) {
     }
 
     const schoolClass = classesCache.find((c) => c.id === classId);
+    const checkinText = `Hi, we've noticed you've missed a few ${schoolClass?.name || "class"} meetings lately. We hope you're doing well — please let us know if we can pray for you or support you in any way.`;
 
     flagged.forEach((r) => {
-      const childLabel = r.childName || "your child";
-      const checkinText = `Good afternoon. We've noticed ${childLabel} has missed several recent roll calls in ${schoolClass?.name || "class"}. If they've been unwell or something else is going on, please reply and let the class teacher know — we're glad to help.`;
       const waLink = buildClickToChatLink(r.whatsappNumber || r.phone, checkinText);
       const row = document.createElement("div");
       row.className = "absent-row";
@@ -1115,12 +1114,20 @@ async function reviewLessonPlan(id, newStatus) {
   }
 }
 
-// ---------- Homework (AI/OCR) ----------
+// ---------- Homework (photo -> PDF) ----------
+//
+// 2026-09 redesign: AI OCR/structuring is gone. The teacher attaches a photo
+// of the homework note (optional), types instructions (optional - but one
+// of the two is required), and Save Draft asks the backend to turn that
+// into a single-page PDF. Publish just marks it published; parents are
+// notified the same way as everywhere else in this app - a click-to-chat
+// wa.me link per parent, built client-side from parentsCache, with no
+// backend WhatsApp send involved.
 
 let homeworkCache = [];
 let editingHomeworkId = null;
-let lastScannedImageBase64 = null; // kept so the published record can store the original photo
-let lastScannedImageMediaType = null;
+let selectedHomeworkPhotoBase64 = null;
+let selectedHomeworkPhotoMediaType = null;
 
 function fileToBase64(file) {
   return new Promise((resolve, reject) => {
@@ -1132,6 +1139,55 @@ function fileToBase64(file) {
     };
     reader.onerror = reject;
     reader.readAsDataURL(file);
+  });
+}
+
+// Resizes to at most 1600px on the longest side and iteratively lowers JPEG
+// quality until the result is roughly under 500KB, so a photo taken on a
+// modern phone camera doesn't blow past the backend's request-size limit or
+// take forever to upload on a slow connection. Returns a File-like Blob.
+function compressImageFile(file, { maxDimension = 1600, targetBytes = 500 * 1024 } = {}) {
+  return new Promise((resolve, reject) => {
+    const img = new Image();
+    const objectUrl = URL.createObjectURL(file);
+    img.onload = () => {
+      URL.revokeObjectURL(objectUrl);
+      let { width, height } = img;
+      if (width > height && width > maxDimension) {
+        height = Math.round((height * maxDimension) / width);
+        width = maxDimension;
+      } else if (height >= width && height > maxDimension) {
+        width = Math.round((width * maxDimension) / height);
+        height = maxDimension;
+      }
+
+      const canvas = document.createElement("canvas");
+      canvas.width = width;
+      canvas.height = height;
+      const ctx = canvas.getContext("2d");
+      ctx.drawImage(img, 0, 0, width, height);
+
+      const tryQuality = (quality) => {
+        canvas.toBlob(
+          (blob) => {
+            if (!blob) return reject(new Error("Couldn't process that image."));
+            if (blob.size <= targetBytes || quality <= 0.4) {
+              resolve(blob);
+            } else {
+              tryQuality(quality - 0.1);
+            }
+          },
+          "image/jpeg",
+          quality
+        );
+      };
+      tryQuality(0.85);
+    };
+    img.onerror = () => {
+      URL.revokeObjectURL(objectUrl);
+      reject(new Error("Couldn't read that image file."));
+    };
+    img.src = objectUrl;
   });
 }
 
@@ -1151,59 +1207,32 @@ async function loadApprovedLessonPlansForHomework() {
   }
 }
 
-window.scanHomeworkPhoto = async function () {
-  const statusEl = document.getElementById("hwScanStatus");
+// Runs as soon as a photo is chosen: compresses it client-side and holds it
+// (as base64) in memory until Save Draft actually sends it. No backend call
+// happens here - unlike the old Scan Note step, picking a photo is free and
+// instant.
+window.handleHomeworkPhotoSelected = async function () {
+  const statusEl = document.getElementById("hwPhotoStatus");
   const fileInput = document.getElementById("hwPhotoInput");
   const file = fileInput.files[0];
 
   if (!file) {
-    statusEl.textContent = "Choose or take a photo first.";
+    selectedHomeworkPhotoBase64 = null;
+    selectedHomeworkPhotoMediaType = null;
+    statusEl.textContent = "";
     return;
   }
 
-  statusEl.textContent = "Scanning...";
+  statusEl.textContent = "Processing photo...";
   try {
-    const base64 = await fileToBase64(file);
-    lastScannedImageBase64 = base64;
-    lastScannedImageMediaType = file.type || "image/jpeg";
-    const result = await api("/homework/ocr", {
-      method: "POST",
-      body: JSON.stringify({ imageBase64: base64, mediaType: lastScannedImageMediaType }),
-    });
-
-    document.getElementById("hwRawText").value = result.text;
-    document.getElementById("hwRawText").style.display = "block";
-    document.getElementById("hwStructureBtn").style.display = "inline-block";
-    statusEl.textContent = result.text.includes("[unclear]")
-      ? "Scanned - check the [unclear] spots below before continuing."
-      : "Scanned. Review the text, then tap \"Fill In Details From This Text\".";
+    const compressed = await compressImageFile(file);
+    selectedHomeworkPhotoBase64 = await fileToBase64(compressed);
+    selectedHomeworkPhotoMediaType = "image/jpeg";
+    statusEl.textContent = `Photo ready (${Math.round(compressed.size / 1024)}KB) - will be included in the PDF.`;
   } catch (err) {
-    // A 422 from the backend means low confidence - the message already
-    // explains it's a retake-photo situation, so just show it as-is.
-    lastScannedImageBase64 = null;
-    lastScannedImageMediaType = null;
-    statusEl.textContent = err.message;
-  }
-};
-
-window.structureHomeworkNote = async function () {
-  const statusEl = document.getElementById("hwScanStatus");
-  const rawText = document.getElementById("hwRawText").value.trim();
-  if (!rawText) {
-    statusEl.textContent = "Nothing to structure yet.";
-    return;
-  }
-
-  statusEl.textContent = "Filling in details...";
-  try {
-    const structured = await api("/homework/structure", { method: "POST", body: JSON.stringify({ rawText }) });
-    document.getElementById("hwSubject").value = structured.subject;
-    document.getElementById("hwInstructions").value = structured.instructions;
-    document.getElementById("hwDueDate").value = structured.dueDate;
-    document.getElementById("hwMaterials").value = arrayToLines(structured.materials);
-    statusEl.textContent = "Details filled in below - review and edit before saving.";
-  } catch (err) {
-    statusEl.textContent = "Couldn't fill in details: " + err.message;
+    selectedHomeworkPhotoBase64 = null;
+    selectedHomeworkPhotoMediaType = null;
+    statusEl.textContent = "Couldn't process that photo: " + err.message;
   }
 };
 
@@ -1232,6 +1261,7 @@ function renderMyHomeworkTable(list) {
       <td>
         ${canEdit ? `<button class="edit-homework-btn" data-id="${hw.id}">Edit</button>` : ""}
         ${canEdit ? `<button class="publish-homework-btn" data-id="${hw.id}">Publish</button>` : ""}
+        ${hw.status === "published" ? `<button class="send-links-homework-btn" data-id="${hw.id}">Send Links</button>` : ""}
         <button class="print-homework-btn" data-id="${hw.id}">Print</button>
         ${canEdit ? `<button class="delete-homework-btn" data-id="${hw.id}" style="background:#a33;">Delete</button>` : ""}
       </td>`;
@@ -1243,6 +1273,9 @@ function renderMyHomeworkTable(list) {
   });
   tbody.querySelectorAll(".publish-homework-btn").forEach((btn) => {
     btn.addEventListener("click", () => publishHomework(btn.dataset.id));
+  });
+  tbody.querySelectorAll(".send-links-homework-btn").forEach((btn) => {
+    btn.addEventListener("click", () => renderHomeworkSendLinks(btn.dataset.id));
   });
   tbody.querySelectorAll(".print-homework-btn").forEach((btn) => {
     btn.addEventListener("click", () => printHomework(btn.dataset.id, list));
@@ -1262,6 +1295,13 @@ function startEditHomework(id) {
   document.getElementById("hwInstructions").value = hw.instructions || "";
   document.getElementById("hwDueDate").value = hw.dueDate || "";
   document.getElementById("hwMaterials").value = arrayToLines(hw.materials);
+  // A previously-attached photo isn't re-loaded into the file input (the
+  // browser won't let JS populate a file input, and we don't re-fetch the
+  // PDF's image back out). Choosing a new photo here replaces it; leaving
+  // the photo field empty keeps whatever photo the draft already has.
+  document.getElementById("hwPhotoStatus").textContent = hw.sourceType === "photo"
+    ? "This draft already has a photo attached. Choose a new one only if you want to replace it."
+    : "";
 
   document.getElementById("homeworkFormTitle").textContent = "Edit Homework";
   document.getElementById("hwCancelBtn").style.display = "inline-block";
@@ -1270,18 +1310,15 @@ function startEditHomework(id) {
 
 window.cancelEditHomework = function () {
   editingHomeworkId = null;
-  lastScannedImageBase64 = null;
-  lastScannedImageMediaType = null;
+  selectedHomeworkPhotoBase64 = null;
+  selectedHomeworkPhotoMediaType = null;
   document.getElementById("hwLessonPlan").value = "";
   document.getElementById("hwPhotoInput").value = "";
-  document.getElementById("hwRawText").value = "";
-  document.getElementById("hwRawText").style.display = "none";
-  document.getElementById("hwStructureBtn").style.display = "none";
+  document.getElementById("hwPhotoStatus").textContent = "";
   document.getElementById("hwSubject").value = "";
   document.getElementById("hwInstructions").value = "";
   document.getElementById("hwDueDate").value = "";
   document.getElementById("hwMaterials").value = "";
-  document.getElementById("hwScanStatus").textContent = "";
   document.getElementById("homeworkFormTitle").textContent = "New Homework";
   document.getElementById("hwCancelBtn").style.display = "none";
 };
@@ -1297,8 +1334,8 @@ window.saveHomework = async function () {
     statusEl.textContent = "Choose an approved lesson plan first.";
     return;
   }
-  if (!instructions) {
-    statusEl.textContent = "Instructions are required.";
+  if (!instructions && !selectedHomeworkPhotoBase64 && !editingHomeworkId) {
+    statusEl.textContent = "Attach a photo of the homework note, or type instructions, before saving.";
     return;
   }
 
@@ -1309,11 +1346,11 @@ window.saveHomework = async function () {
     instructions,
     dueDate: document.getElementById("hwDueDate").value || null,
     materials: linesToArray(document.getElementById("hwMaterials").value),
-    sourceType: lastScannedImageBase64 ? "ocr" : "manual",
-    originalImageBase64: lastScannedImageBase64,
-    originalImageMediaType: lastScannedImageMediaType,
+    photoBase64: selectedHomeworkPhotoBase64,
+    photoMediaType: selectedHomeworkPhotoMediaType,
   };
 
+  statusEl.textContent = "Building PDF...";
   try {
     if (editingHomeworkId) {
       await api(`/homework/${editingHomeworkId}`, { method: "PUT", body: JSON.stringify(payload) });
@@ -1329,30 +1366,41 @@ window.saveHomework = async function () {
 };
 
 async function publishHomework(id) {
-  if (!confirm("Publish this homework? Once published you can't edit or delete it.")) return;
+  if (!confirm("Publish this homework? This finalizes the PDF and cannot be undone.")) return;
   const statusEl = document.getElementById("homeworkStatus");
   try {
-    const result = await api(`/homework/${id}/publish`, { method: "POST" });
+    await api(`/homework/${id}/publish`, { method: "POST" });
     await loadMyHomework();
-    renderHomeworkSendLinks(result.parents);
-    statusEl.textContent = "Published. Tap Send below for each parent to deliver it on WhatsApp.";
+    statusEl.textContent = "Published. Tap \"Send Links\" below to message each parent.";
+    renderHomeworkSendLinks(id);
   } catch (err) {
     statusEl.textContent = "Couldn't publish: " + err.message;
   }
 }
 
-function renderHomeworkSendLinks(parents) {
+// Builds one click-to-chat WhatsApp button per parent in the homework's
+// class, same pattern as Attendance and the low-attendance check-in - no
+// backend send, just a wa.me link prefilled with the message text and the
+// homework's PDF link. The teacher taps Send per parent.
+function renderHomeworkSendLinks(id) {
+  const hw = homeworkCache.find((h) => h.id === id);
   const container = document.getElementById("homeworkSendLinks");
-  if (!container) return;
-  if (!parents || !parents.length) {
-    container.innerHTML = "<p style='font-size:13px;color:#888;'>No parents with a phone number on file for this class.</p>";
+  if (!hw || !container) return;
+
+  const classParents = parentsCache.filter((p) => p.classId === hw.classId);
+  if (!classParents.length) {
+    container.innerHTML = "<p class=\"hint\">No parents found for this class.</p>";
     return;
   }
-  container.innerHTML = parents.map((p) => `
-    <div class="absent-row">
-      <span><strong>${escapeHtml(p.childName || "(no child name)")}</strong> — parent: ${escapeHtml(p.name)}</span>
-      <a href="${p.waLink}" target="_blank" rel="noopener"><button class="wa-btn" type="button">Send</button></a>
-    </div>`).join("");
+
+  const messageText = `Homework${hw.subject ? " - " + hw.subject : ""}${hw.dueDate ? " (due " + hw.dueDate + ")" : ""}: ${hw.pdfUrl}`;
+
+  container.innerHTML = `<p class="hint" style="margin-top:10px;">Send to each parent:</p>` + classParents
+    .map((p) => {
+      const waLink = buildClickToChatLink(p.whatsappNumber || p.phone, messageText);
+      return `<a href="${waLink}" target="_blank" rel="noopener"><button class="wa-btn" type="button">Send to ${escapeHtml(p.childName || p.name || "parent")}</button></a>`;
+    })
+    .join(" ");
 }
 
 async function deleteHomework(id) {
@@ -1562,25 +1610,19 @@ function printLessonPlan(id, list) {
   openPrintWindow(title, bodyHtml);
 }
 
+// Homework now always has a backend-generated PDF (pdfUrl) that already
+// includes the instructions/materials text and any attached photo, so
+// printing is just opening it - the browser's own PDF viewer has
+// Print/Save built in. No client-side HTML-to-print rebuild needed anymore.
 function printHomework(id, list) {
   const hw = list.find((h) => h.id === id);
   if (!hw) return;
 
-  const cls = classesCache.find((c) => c.id === hw.classId);
-  const title = `Homework - ${hw.subject || ""}`;
-
-  const bodyHtml = `
-    <h1>${escapeHtml(hw.subject || "Homework")}</h1>
-    <div class="meta">
-      ${escapeHtml(cls ? cls.name : "")}${hw.dueDate ? " &middot; Due " + escapeHtml(hw.dueDate) : ""}
-    </div>
-    <h2>Instructions</h2>
-    <p>${escapeHtml(hw.instructions || "")}</p>
-    <h2>Materials Needed</h2>
-    ${printListOrEmpty(hw.materials)}
-  `;
-
-  openPrintWindow(title, bodyHtml);
+  if (!hw.pdfUrl) {
+    alert("This homework doesn't have a PDF yet.");
+    return;
+  }
+  window.open(hw.pdfUrl, "_blank");
 }
 
 // ---------- Utils ----------

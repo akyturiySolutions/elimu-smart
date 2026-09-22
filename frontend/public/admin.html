@@ -4,14 +4,6 @@
 <meta charset="UTF-8">
 <title>Elimu Smart Admin</title>
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<link rel="manifest" href="/manifest.json">
-<meta name="theme-color" content="#2C3E6B">
-<!-- iOS home-screen support: Apple ignores the manifest for these bits,
-     so they're set explicitly here too. -->
-<meta name="apple-mobile-web-app-capable" content="yes">
-<meta name="apple-mobile-web-app-status-bar-style" content="default">
-<meta name="apple-mobile-web-app-title" content="Elimu Smart">
-<link rel="apple-touch-icon" href="/icons/apple-touch-icon.png">
 <style>
   @import url('https://fonts.googleapis.com/css2?family=Lora:wght@500;600;700&family=Karla:wght@400;500;600;700&display=swap');
 
@@ -311,46 +303,6 @@
     .tab-nav { gap: 2px; }
     .tab-btn { padding: 8px 10px; font-size: 13px; }
   }
-
-  /* ---- Install app banner (Android + iOS) ---- */
-  #installBanner {
-    position: fixed;
-    left: 0; right: 0; bottom: 0;
-    z-index: 999;
-    background: var(--indigo-dark);
-    color: #FAF3E7;
-    padding: 12px 16px;
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    gap: 12px;
-    font-family: 'Karla', sans-serif;
-    font-size: 14px;
-    box-shadow: 0 -2px 10px rgba(0,0,0,0.15);
-  }
-  #installBannerText { flex: 1; }
-  #installBannerActions { display: flex; align-items: center; gap: 8px; flex-shrink: 0; }
-  #installBannerBtn {
-    background: var(--ochre);
-    color: #fff;
-    border: none;
-    border-radius: 6px;
-    padding: 8px 14px;
-    font-weight: 600;
-    font-size: 13px;
-    cursor: pointer;
-  }
-  #installBannerBtn:hover { background: var(--ochre-dark); }
-  #installBannerDismiss {
-    background: transparent;
-    color: #FAF3E7;
-    border: none;
-    font-size: 16px;
-    padding: 4px 8px;
-    cursor: pointer;
-    opacity: 0.8;
-  }
-  #installBannerDismiss:hover { opacity: 1; }
 </style>
 </head>
 <body>
@@ -462,7 +414,7 @@ Jane Wanjiru, 0733987654
 
   <div class="tab-panel" id="panel-attendance" style="display:none;">
   <div class="card">
-    <h2>Class Roll Call Register</h2>
+    <h2>Attendance</h2>
     <select id="attendanceClass" onchange="loadAttendanceForm()"><option value="">-- Choose a Class --</option></select>
     <input id="attendanceDate" type="date">
     <div id="attendanceList"></div>
@@ -472,23 +424,23 @@ Jane Wanjiru, 0733987654
   </div>
 
   <div class="card" id="absenteesCard" style="display:none;">
-    <h2>Absent From Today's Roll Call <span class="tier-badge tier-2">Level 2: Click-to-Chat</span></h2>
+    <h2>Absent This Meeting <span class="tier-badge tier-2">Level 2: Click-to-Chat</span></h2>
     <p class="hint">Review the message, then tap Send — it opens WhatsApp with the reminder ready. No copy-paste.</p>
     <div id="absenteesList"></div>
   </div>
 
   <div class="card" id="insightsCard" style="display:none;">
     <h2>Attendance Insights</h2>
-    <p class="hint">Based on the last several recorded roll calls for this class.</p>
+    <p class="hint">Based on the last several recorded meetings for this class.</p>
 
-    <h3 style="font-size:15px;margin-top:16px;">Recent Roll Calls</h3>
+    <h3 style="font-size:15px;margin-top:16px;">Recent Meetings</h3>
     <div class="table-wrap"><table>
       <thead><tr><th>Date</th><th>Present</th></tr></thead>
       <tbody id="historyTable"></tbody>
     </table></div>
 
     <h3 style="font-size:15px;margin-top:16px;">Parents Needing a Check-in <span class="tier-badge tier-2">Level 2: Click-to-Chat</span></h3>
-    <p class="hint">Flagged when attendance rate is below 50% over recent roll calls (with at least 2 roll calls recorded).</p>
+    <p class="hint">Flagged when attendance rate is below 50% over recent meetings (with at least 2 meetings recorded).</p>
     <div id="lowAttendanceList"></div>
   </div>
   </div>
@@ -551,21 +503,17 @@ Jane Wanjiru, 0733987654
   <div class="tab-panel" id="panel-homework" style="display:none;">
   <div class="card" id="addHomeworkCard" style="display:none;">
     <h2 id="homeworkFormTitle">New Homework</h2>
-    <p class="hint">Must be linked to one of your approved lesson plans. Scan a handwritten note to fill in the details automatically, or type them in directly.</p>
+    <p class="hint">Must be linked to one of your approved lesson plans. Attach a photo of the homework note, type the details in, or both — either way it becomes a printable PDF you can forward to parents.</p>
 
     <select id="hwLessonPlan"><option value="">-- Choose an approved lesson plan --</option></select>
 
-    <div id="hwScanSection">
-      <input id="hwPhotoInput" type="file" accept="image/*">
-      <button id="hwScanBtn" onclick="scanHomeworkPhoto()">Scan Note</button>
-      <p id="hwScanStatus" style="font-size:13px;"></p>
+    <div id="hwPhotoSection">
+      <input id="hwPhotoInput" type="file" accept="image/*" onchange="handleHomeworkPhotoSelected()">
+      <p id="hwPhotoStatus" style="font-size:13px;"></p>
     </div>
 
-    <textarea id="hwRawText" rows="3" placeholder="Scanned text will appear here — review and fix any [unclear] markers before structuring." style="display:none;"></textarea>
-    <button id="hwStructureBtn" onclick="structureHomeworkNote()" style="display:none;">Fill In Details From This Text</button>
-
     <input id="hwSubject" placeholder="Subject">
-    <textarea id="hwInstructions" rows="3" placeholder="Homework instructions"></textarea>
+    <textarea id="hwInstructions" rows="3" placeholder="Homework instructions (optional if you've attached a photo)"></textarea>
     <input id="hwDueDate" type="date">
     <textarea id="hwMaterials" rows="2" placeholder="Materials needed, one per line"></textarea>
 
@@ -576,7 +524,7 @@ Jane Wanjiru, 0733987654
 
   <div class="card" id="myHomeworkCard" style="display:none;">
     <h2>My Homework</h2>
-    <p class="hint">Draft homework can be edited or published. Publishing sends it to every parent in the class via WhatsApp and cannot be undone.</p>
+    <p class="hint">Draft homework can be edited or published. Publishing generates the final PDF link for parents and cannot be undone.</p>
     <div class="table-wrap"><table>
       <thead><tr><th>Subject</th><th>Due</th><th>Status</th><th>Actions</th></tr></thead>
       <tbody id="myHomeworkTable"></tbody>
@@ -606,8 +554,7 @@ Jane Wanjiru, 0733987654
   </div>
 </div>
 
-<script src="/js/install-prompt.js"></script>
 <script type="module" src="/js/firebase-config.js"></script>
-<script type="module" src="/js/admin.js?v=2026-08-20-edit-parent"></script>
+<script type="module" src="/js/admin.js?v=2026-09-22-homework-pdf"></script>
 </body>
 </html>
