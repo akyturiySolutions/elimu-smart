@@ -1,0 +1,83 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Homework - Elimu Smart</title>
+<meta name="robots" content="noindex">
+<!-- What WhatsApp shows in the link preview -->
+<meta property="og:title" content="Homework from your child's teacher">
+<meta property="og:description" content="Tap to open the homework (PDF).">
+<meta property="og:site_name" content="Elimu Smart">
+<style>
+  :root { --bg: #faf6ee; --ink: #1f2a44; --muted: #6b6b6b; --accent: #2b3a67; }
+  body { margin: 0; min-height: 100vh; display: flex; align-items: center; justify-content: center;
+         background: var(--bg); color: var(--ink); font-family: system-ui, -apple-system, "Segoe UI", sans-serif; }
+  .box { max-width: 420px; padding: 24px 16px; text-align: center; }
+  h1 { font-size: 20px; margin: 0 0 8px; }
+  p { color: var(--muted); font-size: 15px; line-height: 1.5; margin: 0 0 16px; }
+  a.btn { display: none; background: var(--accent); color: #fff; padding: 12px 20px; border-radius: 8px;
+          text-decoration: none; font-weight: 600; }
+</style>
+</head>
+<body>
+<div class="box">
+  <h1 id="title">Opening homework…</h1>
+  <p id="msg">One moment.</p>
+  <a class="btn" id="openBtn" href="#">Open homework PDF</a>
+</div>
+<script>
+// Short homework links: https://<app>/h/<code> (firebase.json rewrites /h/**
+// to this page). Looks the code up in Firestore's homeworkLinks/{code} via
+// the public REST API - firestore.rules allow a single-document get, never a
+// list - then forwards to the PDF. No login, no Firebase SDK, and no call to
+// the Render backend, so parents don't wait for a cold start.
+(function () {
+  var PROJECT_ID = "elimu-smart-76f23";
+  var titleEl = document.getElementById("title");
+  var msgEl = document.getElementById("msg");
+  var btn = document.getElementById("openBtn");
+
+  function fail(text) {
+    titleEl.textContent = "Homework not found";
+    msgEl.textContent = text;
+  }
+
+  var match = location.pathname.match(/\/h\/([a-z0-9]{6,16})\/?$/i);
+  var code = match ? match[1].toLowerCase() : new URLSearchParams(location.search).get("c");
+  if (!code || !/^[a-z0-9]{6,16}$/.test(code)) {
+    fail("This link looks incomplete. Please check the full link from the teacher's message.");
+    return;
+  }
+
+  var url = "https://firestore.googleapis.com/v1/projects/" + PROJECT_ID +
+    "/databases/(default)/documents/homeworkLinks/" + code;
+
+  fetch(url)
+    .then(function (res) {
+      if (res.status === 404) throw new Error("missing");
+      if (!res.ok) throw new Error("http " + res.status);
+      return res.json();
+    })
+    .then(function (doc) {
+      var pdfUrl = doc && doc.fields && doc.fields.pdfUrl && doc.fields.pdfUrl.stringValue;
+      // Only ever forward to our own Storage files, never an arbitrary site.
+      if (!pdfUrl || !/^https:\/\/(storage|firebasestorage)\.googleapis\.com\//.test(pdfUrl)) {
+        throw new Error("bad target");
+      }
+      btn.href = pdfUrl;
+      btn.style.display = "inline-block";
+      msgEl.textContent = "If it doesn't open automatically, tap the button below.";
+      location.replace(pdfUrl);
+    })
+    .catch(function (err) {
+      if (err.message === "missing") {
+        fail("This homework link doesn't exist or has been removed. Please ask the teacher to resend it.");
+      } else {
+        fail("Couldn't open the homework right now. Check your internet connection and try the link again.");
+      }
+    });
+})();
+</script>
+</body>
+</html>

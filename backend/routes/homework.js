@@ -34,7 +34,40 @@ const { requireAuth, blockReadOnlyRoles } = require("../middleware/auth");
 const { buildHomeworkPdf } = require("../services/pdfHomework");
 const { uploadHomeworkImage, uploadHomeworkPdf, deleteHomeworkFile } = require("../services/storage");
 
+const crypto = require("crypto");
+
 const db = () => admin.firestore();
+
+// Short links: parents get https://<app>/h/<code> instead of the very long
+// signed Storage URL. The code maps to the PDF in a top-level
+// homeworkLinks/{code} doc that firestore.rules lets anyone *get* (never
+// list), and frontend/public/h.html looks it up and forwards to the PDF.
+// Served by Firebase Hosting, so there's no Render cold-start wait for parents.
+const PUBLIC_APP_URL = (process.env.PUBLIC_APP_URL || "https://elimu-smart-76f23.web.app").replace(/\/+$/, "");
+const SHORT_CODE_ALPHABET = "abcdefghijkmnpqrstuvwxyz23456789"; // no 0/o/1/l - easy to read aloud
+
+function newShortCode(length = 8) {
+  const bytes = crypto.randomBytes(length);
+  let code = "";
+  for (let i = 0; i < length; i++) code += SHORT_CODE_ALPHABET[bytes[i] % SHORT_CODE_ALPHABET.length];
+  return code;
+}
+
+async function createShortLink(pdfUrl) {
+  for (let attempt = 0; attempt < 5; attempt++) {
+    const code = newShortCode();
+    const ref = db().collection("homeworkLinks").doc(code);
+    try {
+      // create() fails if the code is already taken, so collisions just retry.
+      await ref.create({ pdfUrl, createdAt: admin.firestore.FieldValue.serverTimestamp() });
+      return { shortCode: code, shortUrl: `${PUBLIC_APP_URL}/h/${code}` };
+    } catch (err) {
+      if (err.code === 6 || /already exists/i.test(err.message)) continue;
+      throw err;
+    }
+  }
+  throw new Error("Couldn't create a short link - please try publishing again.");
+}
 
 function homeworkCollection(schoolId) {
   return db().collection("schools").doc(schoolId).collection("homework");
@@ -285,8 +318,8 @@ router.put("/:id", requireAuth, blockReadOnlyRoles, async (req, res) => {
 });
 
 // ---------- POST /:id/publish ----------
-// No WhatsApp send happens here - see the file-header note. This just marks
-// the record published so the frontend knows to render Send links.
+// No WhatsApp send happens here - see the file-header note. This marks the
+// record published and gives it a short parent-facing link (shortUrl).
 router.post("/:id/publish", requireAuth, blockReadOnlyRoles, async (req, res) => {
   try {
     if (req.role !== "teacher") {
@@ -304,7 +337,24 @@ router.post("/:id/publish", requireAuth, blockReadOnlyRoles, async (req, res) =>
       return res.status(400).json({ error: "Already published." });
     }
 
-    await ref.update({ status: "published", publishedAt: admin.firestore.FieldValue.serverTimestamp() });
+    if (!current.pdfUrl) {
+      return res.status(400).json({ error: "This draft has no PDF yet - tap Edit, then Save Draft, then publish." });
+    }
+
+    // A short link failure shouldn't block publishing - parents would just
+    // get the long PDF link instead.
+    let shortLink = {};
+    try {
+      shortLink = await createShortLink(current.pdfUrl);
+    } catch (err) {
+      console.error("Short link creation failed (falling back to full PDF link):", err.message);
+    }
+
+    await ref.update({
+      status: "published",
+      publishedAt: admin.firestore.FieldValue.serverTimestamp(),
+      ...shortLink,
+    });
     const updated = await ref.get();
     res.json({ homework: { id: updated.id, ...updated.data() } });
   } catch (err) {

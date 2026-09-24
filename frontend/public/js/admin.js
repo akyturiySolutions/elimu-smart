@@ -9,7 +9,7 @@ import {
 // Printed to the console on every page load - the fastest way to check
 // "is my latest deploy actually live?" without digging through DevTools
 // Network tab. Just open the console after a deploy and compare.
-const BUILD_VERSION = "2026-09-22-homework-pdf";
+const BUILD_VERSION = "2026-09-24-short-links";
 console.log("Elimu Smart admin.js build:", BUILD_VERSION);
 
 let currentToken = null;
@@ -1393,7 +1393,15 @@ function renderHomeworkSendLinks(id) {
     return;
   }
 
-  const messageText = `Homework${hw.subject ? " - " + hw.subject : ""}${hw.dueDate ? " (due " + hw.dueDate + ")" : ""}: ${hw.pdfUrl}`;
+  // Prefer the short link (https://<app>/h/<code>); fall back to the full
+  // PDF link for anything published before short links existed.
+  const link = hw.shortUrl || hw.pdfUrl;
+  if (!link) {
+    container.innerHTML = "<p class=\"hint\">This homework has no PDF, so there's nothing to send. It was published before PDFs existed - create it again as new homework.</p>";
+    return;
+  }
+
+  const messageText = `Homework${hw.subject ? " - " + hw.subject : ""}${hw.dueDate ? " (due " + hw.dueDate + ")" : ""}: ${link}`;
 
   container.innerHTML = `<p class="hint" style="margin-top:10px;">Send to each parent:</p>` + classParents
     .map((p) => {
