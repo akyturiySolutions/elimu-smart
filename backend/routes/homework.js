@@ -30,8 +30,9 @@ const express = require("express");
 const admin = require("firebase-admin");
 const router = express.Router();
 
+const { requireAuth, blockReadOnlyRoles } = require("../middleware/auth");
 const { buildHomeworkPdf } = require("../services/pdfHomework");
-const { uploadHomeworkPdf, deleteHomeworkFile } = require("../services/storage");
+const { uploadHomeworkImage, uploadHomeworkPdf, deleteHomeworkFile } = require("../services/storage");
 
 const db = () => admin.firestore();
 
@@ -44,13 +45,18 @@ function linesFromArray(materials) {
 }
 
 // ---------- GET / - list this teacher's (or, for admin, the school's) homework ----------
-router.get("/", async (req, res) => {
+router.get("/", requireAuth, async (req, res) => {
   try {
     let query = homeworkCollection(req.schoolId);
     if (req.role === "teacher") {
       query = query.where("teacherId", "==", req.user.uid);
+    } else {
+      if (req.query.classId) query = query.where("classId", "==", req.query.classId);
+      if (req.query.status) query = query.where("status", "==", req.query.status);
     }
-    const snap = await query.orderBy("updatedAt", "desc").get();
+    // No orderBy here on purpose: where(teacherId) + orderBy(updatedAt)
+    // would need a composite Firestore index.
+    const snap = await query.get();
     const homework = snap.docs.map((d) => ({ id: d.id, ...d.data() }));
     res.json({ homework });
   } catch (err) {
@@ -60,10 +66,13 @@ router.get("/", async (req, res) => {
 });
 
 // ---------- GET /:id ----------
-router.get("/:id", async (req, res) => {
+router.get("/:id", requireAuth, async (req, res) => {
   try {
     const doc = await homeworkCollection(req.schoolId).doc(req.params.id).get();
     if (!doc.exists) return res.status(404).json({ error: "Homework not found." });
+    if (req.role === "teacher" && doc.data().teacherId !== req.user.uid) {
+      return res.status(403).json({ error: "Teachers can only access their own homework." });
+    }
     res.json({ homework: { id: doc.id, ...doc.data() } });
   } catch (err) {
     console.error("GET /homework/:id failed:", err);
@@ -76,8 +85,11 @@ router.get("/:id", async (req, res) => {
 //         photoBase64, photoMediaType }
 // At least one of `instructions` (non-empty text) or `photoBase64` is
 // required - the PDF needs something to put on the page.
-router.post("/", async (req, res) => {
+router.post("/", requireAuth, blockReadOnlyRoles, async (req, res) => {
   try {
+    if (req.role !== "teacher") {
+      return res.status(403).json({ error: "Only teachers manage homework." });
+    }
     const { classId, lessonPlanId, subject, instructions, dueDate, materials, photoBase64, photoMediaType } = req.body;
 
     if (!classId || !lessonPlanId) {
@@ -87,6 +99,10 @@ router.post("/", async (req, res) => {
     const hasPhoto = typeof photoBase64 === "string" && photoBase64.length > 0;
     if (!hasInstructions && !hasPhoto) {
       return res.status(400).json({ error: "Add a photo of the homework note, or type instructions, before saving." });
+    }
+
+    if (classId !== req.classId) {
+      return res.status(403).json({ error: "Teachers can only create homework for their own class." });
     }
 
     const lessonPlanDoc = await db().collection("schools").doc(req.schoolId).collection("lessonPlans").doc(lessonPlanId).get();
@@ -106,9 +122,13 @@ router.post("/", async (req, res) => {
 
     let imageBuffer = null;
     let mediaType = null;
+    let photoStoragePath = null;
     if (hasPhoto) {
       imageBuffer = Buffer.from(photoBase64, "base64");
       mediaType = photoMediaType || "image/jpeg";
+      // Keep the photo itself too, so later edits can rebuild the PDF with it.
+      const uploadedPhoto = await uploadHomeworkImage(req.schoolId, photoBase64, mediaType);
+      photoStoragePath = uploadedPhoto.storagePath;
     }
 
     // Look up the class name for the PDF header - falls back gracefully if
@@ -144,6 +164,8 @@ router.post("/", async (req, res) => {
       dueDate: dueDate || null,
       materials: materialsList,
       sourceType: hasPhoto ? "photo" : "manual",
+      photoStoragePath,
+      photoMediaType: hasPhoto ? mediaType : null,
       pdfUrl,
       pdfStoragePath,
       status: "draft",
@@ -161,8 +183,11 @@ router.post("/", async (req, res) => {
 });
 
 // ---------- PUT /:id - edit while still a draft ----------
-router.put("/:id", async (req, res) => {
+router.put("/:id", requireAuth, blockReadOnlyRoles, async (req, res) => {
   try {
+    if (req.role !== "teacher") {
+      return res.status(403).json({ error: "Only teachers manage homework." });
+    }
     const ref = homeworkCollection(req.schoolId).doc(req.params.id);
     const existing = await ref.get();
     if (!existing.exists) return res.status(404).json({ error: "Homework not found." });
@@ -178,22 +203,8 @@ router.put("/:id", async (req, res) => {
     const { subject, instructions, dueDate, materials, photoBase64, photoMediaType } = req.body;
     const hasInstructions = typeof instructions === "string" && instructions.trim().length > 0;
     const hasNewPhoto = typeof photoBase64 === "string" && photoBase64.length > 0;
-    // Keeping the existing PDF's photo is fine if neither instructions nor a
-    // new photo are supplied - but if both come back empty AND there was no
-    // photo before either, there'd be nothing to put on the page.
-    if (!hasInstructions && !hasNewPhoto && current.sourceType !== "photo") {
-      return res.status(400).json({ error: "Add a photo of the homework note, or type instructions, before saving." });
-    }
-
     const materialsList = linesFromArray(materials);
     const resolvedSubject = (subject && subject.trim()) || current.subject;
-
-    let imageBuffer = null;
-    let mediaType = null;
-    if (hasNewPhoto) {
-      imageBuffer = Buffer.from(photoBase64, "base64");
-      mediaType = photoMediaType || "image/jpeg";
-    }
 
     let className = "";
     try {
@@ -203,37 +214,53 @@ router.put("/:id", async (req, res) => {
       // non-fatal
     }
 
-    // Regenerate the PDF whenever text or a new photo changed. If nothing
-    // photo-related changed, we still rebuild from the new text fields plus
-    // the OLD photo isn't re-embeddable without re-fetching it from
-    // Storage - so a new photo is required to change the image; text-only
-    // edits regenerate a text-only-refresh over the previous photo is out
-    // of scope for this simple flow. To keep it predictable: if a new photo
-    // wasn't provided, fall back to re-rendering without an image whenever
-    // sourceType was "manual", and keep the OLD pdf/photo untouched
-    // (skip regeneration) when sourceType is "photo" and no new photo was
-    // sent - only the text fields on the record change in that case.
-    let pdfUrl = current.pdfUrl;
-    let pdfStoragePath = current.pdfStoragePath;
+    // Work out which photo goes into the rebuilt PDF: a newly attached one,
+    // or the one this draft already has in Storage (photoStoragePath, or
+    // originalImageStoragePath on drafts saved by the pre-PDF backend).
+    let imageBuffer = null;
+    let mediaType = null;
+    let photoStoragePath = current.photoStoragePath || current.originalImageStoragePath || null;
+    let photoMediaTypeStored = current.photoMediaType || "image/jpeg";
 
-    if (hasNewPhoto || current.sourceType !== "photo") {
-      const pdfBuffer = await buildHomeworkPdf({
-        subject: resolvedSubject,
-        className,
-        dueDate: dueDate || "",
-        instructions: instructions || "",
-        materials: materialsList,
-        imageBuffer,
-        imageMediaType: mediaType,
-      });
-      const uploaded = await uploadHomeworkPdf(req.schoolId, pdfBuffer);
-      pdfUrl = uploaded.url;
-      pdfStoragePath = uploaded.storagePath;
-
-      // Clean up the previous PDF file now that a new one replaced it.
-      if (current.pdfStoragePath && current.pdfStoragePath !== pdfStoragePath) {
-        deleteHomeworkFile(current.pdfStoragePath).catch((e) => console.error("Couldn't delete old homework PDF:", e.message));
+    if (hasNewPhoto) {
+      mediaType = photoMediaType || "image/jpeg";
+      imageBuffer = Buffer.from(photoBase64, "base64");
+      const uploadedPhoto = await uploadHomeworkImage(req.schoolId, photoBase64, mediaType);
+      if (photoStoragePath && photoStoragePath !== uploadedPhoto.storagePath) {
+        deleteHomeworkFile(photoStoragePath).catch((e) => console.error("Couldn't delete old homework photo:", e.message));
       }
+      photoStoragePath = uploadedPhoto.storagePath;
+      photoMediaTypeStored = mediaType;
+    } else if (photoStoragePath) {
+      try {
+        const [bytes] = await admin.storage().bucket().file(photoStoragePath).download();
+        imageBuffer = bytes;
+        mediaType = photoMediaTypeStored;
+      } catch (e) {
+        console.error("Couldn't load existing homework photo (PDF will be text-only):", e.message);
+        photoStoragePath = null;
+      }
+    }
+
+    if (!hasInstructions && !imageBuffer) {
+      return res.status(400).json({ error: "Add a photo of the homework note, or type instructions, before saving." });
+    }
+
+    // Always rebuild the PDF on edit, so text changes show up in it too.
+    const pdfBuffer = await buildHomeworkPdf({
+      subject: resolvedSubject,
+      className,
+      dueDate: dueDate || "",
+      instructions: instructions || "",
+      materials: materialsList,
+      imageBuffer,
+      imageMediaType: mediaType,
+    });
+    const uploaded = await uploadHomeworkPdf(req.schoolId, pdfBuffer);
+    const pdfUrl = uploaded.url;
+    const pdfStoragePath = uploaded.storagePath;
+    if (current.pdfStoragePath && current.pdfStoragePath !== pdfStoragePath) {
+      deleteHomeworkFile(current.pdfStoragePath).catch((e) => console.error("Couldn't delete old homework PDF:", e.message));
     }
 
     await ref.update({
@@ -241,7 +268,9 @@ router.put("/:id", async (req, res) => {
       instructions: instructions || "",
       dueDate: dueDate || null,
       materials: materialsList,
-      sourceType: hasNewPhoto ? "photo" : current.sourceType,
+      sourceType: imageBuffer ? "photo" : "manual",
+      photoStoragePath,
+      photoMediaType: imageBuffer ? photoMediaTypeStored : null,
       pdfUrl,
       pdfStoragePath,
       updatedAt: admin.firestore.FieldValue.serverTimestamp(),
@@ -258,8 +287,11 @@ router.put("/:id", async (req, res) => {
 // ---------- POST /:id/publish ----------
 // No WhatsApp send happens here - see the file-header note. This just marks
 // the record published so the frontend knows to render Send links.
-router.post("/:id/publish", async (req, res) => {
+router.post("/:id/publish", requireAuth, blockReadOnlyRoles, async (req, res) => {
   try {
+    if (req.role !== "teacher") {
+      return res.status(403).json({ error: "Only teachers manage homework." });
+    }
     const ref = homeworkCollection(req.schoolId).doc(req.params.id);
     const existing = await ref.get();
     if (!existing.exists) return res.status(404).json({ error: "Homework not found." });
@@ -282,8 +314,11 @@ router.post("/:id/publish", async (req, res) => {
 });
 
 // ---------- DELETE /:id - draft only ----------
-router.delete("/:id", async (req, res) => {
+router.delete("/:id", requireAuth, blockReadOnlyRoles, async (req, res) => {
   try {
+    if (req.role !== "teacher") {
+      return res.status(403).json({ error: "Only teachers manage homework." });
+    }
     const ref = homeworkCollection(req.schoolId).doc(req.params.id);
     const existing = await ref.get();
     if (!existing.exists) return res.status(404).json({ error: "Homework not found." });
@@ -297,9 +332,9 @@ router.delete("/:id", async (req, res) => {
     }
 
     await ref.delete();
-    if (current.pdfStoragePath) {
-      deleteHomeworkFile(current.pdfStoragePath).catch((e) => console.error("Couldn't delete homework PDF:", e.message));
-    }
+    [current.pdfStoragePath, current.photoStoragePath, current.originalImageStoragePath]
+      .filter(Boolean)
+      .forEach((path) => deleteHomeworkFile(path).catch((e) => console.error("Couldn't delete homework file:", e.message)));
     res.json({ ok: true });
   } catch (err) {
     console.error("DELETE /homework/:id failed:", err);
