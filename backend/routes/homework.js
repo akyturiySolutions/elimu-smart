@@ -1,340 +1,309 @@
-// backend/routes/homework.js
-// Homework CRUD + AI/OCR flow, scoped to the requesting user's schoolId.
-// Firestore path: schools/{schoolId}/homework/{homeworkId}
+// homework.js
 //
-// Flow (as designed for [[elimu]]):
-//   1. Teacher photographs a handwritten note -> POST /ocr (Gemini or Claude
-//      vision transcribes it - see services/ocrGemini.js / ocrClaude.js)
-//   2. POST /structure turns the raw OCR text into subject/instructions/
-//      dueDate/materials (Gemini) - teacher reviews/edits before anything
-//      is saved; nothing is auto-published at this stage.
-//   3. POST / creates the homework record as a draft. lessonPlanId is
-//      required and must point to a lesson plan with status 'approved' -
-//      enforces the same gate as the Firestore rules.
-//   4. POST /:id/publish marks it published and returns a click-to-chat
-//      WhatsApp link per parent (Level 2 - teacher still taps Send on
-//      each). Deliberately NOT using the WhatsApp Business API here - no
-//      Meta approval, no per-message cost, no phone-number setup required.
-//      services/whatsapp.js's sendTemplateMessage (Level 3, fully
-//      automated) stays available for later if/when that setup is worth it.
+// 2026-09 redesign: the AI OCR/structuring flow (Gemini transcribe + Gemini
+// structure) has been REMOVED. It added a second reading a teacher had to
+// verify (fix [unclear] markers, then re-check the auto-filled fields), and
+// added AI cost/latency to a simple job. New flow: the teacher photographs
+// the homework note (or types instructions directly, or both), and the
+// backend turns that straight into a single-page PDF via pdfHomework.js.
+// That PDF is what gets forwarded to parents (click-to-chat link, same
+// pattern as everywhere else in this app - see below) and it's what gets
+// printed.
 //
-// Role rules: teacher only (create/edit/publish/delete, own class only).
-// Admin can read everything for oversight, same as lessonPlans.js.
+// ocrGemini.js and aiStructureGemini.js are left in place but unused, same
+// as ocrClaude.js already was - nothing calls them from this file anymore.
+// middleware/rateLimiter.js (built for the /ocr and /structure routes) is
+// likewise unused by this file now; it's not wired into any homework route
+// below. Leave it in the repo in case another AI feature needs it later -
+// see docs/RUNBOOK.md's "intentionally dormant code" section, which should
+// be updated to add /ocr, /structure, ocrGemini.js and aiStructureGemini.js
+// to the dormant list.
+//
+// Publishing does NOT send WhatsApp messages from the backend (no WABA -
+// see /areas project notes: click-to-chat only, by explicit choice). This
+// route just flips status to "published" and returns the updated record;
+// the frontend builds one wa.me link per parent client-side, from the
+// parents it already has cached, the same way Attendance and the
+// low-attendance check-in do.
 
-const express = require('express');
-const admin = require('firebase-admin');
-const { requireAuth, blockReadOnlyRoles, requireOwnClass } = require('../middleware/auth');
-// TEMPORARY: using Gemini-only OCR (services/ocrGemini.js) instead of Claude
-// (services/ocrClaude.js) so the full pipeline can be tested on Gemini's
-// free tier without committing to Anthropic billing yet. Same {text,
-// confidence} interface either way - swap this one line back to
-// require('../services/ocrClaude') once ready to compare/switch.
-const { transcribeHomeworkImage } = require('../services/ocrGemini');
-const { structureHomeworkText } = require('../services/aiStructureGemini');
-const { uploadHomeworkImage } = require('../services/storage');
-
+const express = require("express");
+const admin = require("firebase-admin");
 const router = express.Router();
+
+const { buildHomeworkPdf } = require("../services/pdfHomework");
+const { uploadHomeworkPdf, deleteHomeworkFile } = require("../services/storage");
+
 const db = () => admin.firestore();
 
-function buildClickToChatLink(phone, text) {
-  const digits = String(phone || '').replace(/\D/g, '');
-  return `https://wa.me/${digits}?text=${encodeURIComponent(text)}`;
+function homeworkCollection(schoolId) {
+  return db().collection("schools").doc(schoolId).collection("homework");
 }
 
-// POST /api/homework/ocr  { imageBase64, mediaType }
-// Teacher only. Returns { text, confidence } on success.
-// On low confidence, returns 422 so the frontend can show "retake photo"
-// instead of a mostly-blank review form - see whichever ocr*.js service is
-// currently imported above for the confidence heuristic.
-router.post('/ocr', requireAuth, blockReadOnlyRoles, async (req, res) => {
+function linesFromArray(materials) {
+  return Array.isArray(materials) ? materials.filter((m) => typeof m === "string" && m.trim()).map((m) => m.trim()) : [];
+}
+
+// ---------- GET / - list this teacher's (or, for admin, the school's) homework ----------
+router.get("/", async (req, res) => {
   try {
-    if (req.role !== 'teacher') {
-      return res.status(403).json({ error: 'Only teachers can use the homework OCR tool' });
+    let query = homeworkCollection(req.schoolId);
+    if (req.role === "teacher") {
+      query = query.where("teacherId", "==", req.user.uid);
     }
-
-    const { imageBase64, mediaType } = req.body;
-    if (!imageBase64 || !mediaType) {
-      return res.status(400).json({ error: 'imageBase64 and mediaType are required' });
-    }
-
-    const result = await transcribeHomeworkImage(imageBase64, mediaType);
-
-    if (result.confidence === 'low') {
-      return res.status(422).json({
-        error: 'Could not read this note clearly enough. Please retake the photo with better lighting or a steadier shot.',
-        confidence: 'low',
-      });
-    }
-
-    res.json(result);
-  } catch (err) {
-    console.error('Homework OCR failed:', err.message);
-    res.status(500).json({ error: 'Failed to process the image' });
-  }
-});
-
-// POST /api/homework/structure  { rawText }
-// Teacher only. Turns raw OCR (or manually typed) text into structured fields.
-router.post('/structure', requireAuth, blockReadOnlyRoles, async (req, res) => {
-  try {
-    if (req.role !== 'teacher') {
-      return res.status(403).json({ error: 'Only teachers can use this tool' });
-    }
-
-    const { rawText } = req.body;
-    if (!rawText || !rawText.trim()) {
-      return res.status(400).json({ error: 'rawText is required' });
-    }
-
-    const structured = await structureHomeworkText(rawText.trim());
-    res.json(structured);
-  } catch (err) {
-    console.error('Homework structuring failed:', err.message);
-    res.status(500).json({ error: 'Failed to structure the text' });
-  }
-});
-
-// GET /api/homework - list (teacher: own only; admin: all, with optional
-// ?classId=&status= filters for oversight)
-router.get('/', requireAuth, async (req, res) => {
-  try {
-    let query = db().collection('schools').doc(req.schoolId).collection('homework');
-
-    if (req.role === 'teacher') {
-      query = query.where('teacherId', '==', req.user.uid);
-    } else {
-      if (req.query.classId) query = query.where('classId', '==', req.query.classId);
-      if (req.query.status) query = query.where('status', '==', req.query.status);
-    }
-
-    const snap = await query.get();
-    const homework = snap.docs.map((doc) => ({ id: doc.id, ...doc.data() }));
+    const snap = await query.orderBy("updatedAt", "desc").get();
+    const homework = snap.docs.map((d) => ({ id: d.id, ...d.data() }));
     res.json({ homework });
   } catch (err) {
-    console.error('List homework failed:', err.message);
-    res.status(500).json({ error: 'Failed to fetch homework' });
+    console.error("GET /homework failed:", err);
+    res.status(500).json({ error: "Couldn't load homework." });
   }
 });
 
-// GET /api/homework/:id
-router.get('/:id', requireAuth, async (req, res) => {
+// ---------- GET /:id ----------
+router.get("/:id", async (req, res) => {
   try {
-    const ref = db().collection('schools').doc(req.schoolId).collection('homework').doc(req.params.id);
-    const doc = await ref.get();
-    if (!doc.exists) return res.status(404).json({ error: 'Homework not found' });
-
-    const data = doc.data();
-    if (req.role === 'teacher' && data.teacherId !== req.user.uid) {
-      return res.status(403).json({ error: 'Teachers can only access their own homework' });
-    }
-
-    res.json({ homework: { id: doc.id, ...data } });
+    const doc = await homeworkCollection(req.schoolId).doc(req.params.id).get();
+    if (!doc.exists) return res.status(404).json({ error: "Homework not found." });
+    res.json({ homework: { id: doc.id, ...doc.data() } });
   } catch (err) {
-    console.error('Get homework failed:', err.message);
-    res.status(500).json({ error: 'Failed to fetch homework' });
+    console.error("GET /homework/:id failed:", err);
+    res.status(500).json({ error: "Couldn't load homework." });
   }
 });
 
-// POST /api/homework - create draft (teacher only, own class, requires an
-// APPROVED lesson plan - same gate as the Firestore rules we designed earlier)
-router.post('/', requireAuth, blockReadOnlyRoles, async (req, res) => {
+// ---------- POST / - create a draft ----------
+// Body: { classId, lessonPlanId, subject, instructions, dueDate, materials,
+//         photoBase64, photoMediaType }
+// At least one of `instructions` (non-empty text) or `photoBase64` is
+// required - the PDF needs something to put on the page.
+router.post("/", async (req, res) => {
   try {
-    if (req.role !== 'teacher') {
-      return res.status(403).json({ error: 'Only teachers create homework' });
+    const { classId, lessonPlanId, subject, instructions, dueDate, materials, photoBase64, photoMediaType } = req.body;
+
+    if (!classId || !lessonPlanId) {
+      return res.status(400).json({ error: "classId and lessonPlanId are required." });
+    }
+    const hasInstructions = typeof instructions === "string" && instructions.trim().length > 0;
+    const hasPhoto = typeof photoBase64 === "string" && photoBase64.length > 0;
+    if (!hasInstructions && !hasPhoto) {
+      return res.status(400).json({ error: "Add a photo of the homework note, or type instructions, before saving." });
     }
 
-    const { classId, lessonPlanId, subject, instructions, dueDate, materials,
-            sourceType, originalImageBase64, originalImageMediaType } = req.body;
-
-    if (!classId || !lessonPlanId || !instructions) {
-      return res.status(400).json({ error: 'classId, lessonPlanId, and instructions are required' });
+    const lessonPlanDoc = await db().collection("schools").doc(req.schoolId).collection("lessonPlans").doc(lessonPlanId).get();
+    if (!lessonPlanDoc.exists) {
+      return res.status(400).json({ error: "That lesson plan doesn't exist." });
     }
-    if (classId !== req.classId) {
-      return res.status(403).json({ error: 'Teachers can only create homework for their own class' });
+    const lessonPlan = lessonPlanDoc.data();
+    if (lessonPlan.status !== "approved") {
+      return res.status(400).json({ error: "Homework must be linked to an approved lesson plan." });
     }
-
-    const lessonPlanDoc = await db()
-      .collection('schools').doc(req.schoolId)
-      .collection('lessonPlans').doc(lessonPlanId).get();
-
-    if (!lessonPlanDoc.exists || lessonPlanDoc.data().status !== 'approved') {
-      return res.status(400).json({ error: 'Homework must be linked to an approved lesson plan' });
+    if (req.role === "teacher" && lessonPlan.teacherId !== req.user.uid) {
+      return res.status(403).json({ error: "That lesson plan isn't yours." });
     }
 
-    // Photo goes to Firebase Storage, not inline in the Firestore document -
-    // avoids the 1MB Firestore document limit and keeps homework list reads
-    // from dragging full images along with them every time.
-    let originalImageUrl = null;
-    let originalImageStoragePath = null;
-    if (sourceType === 'ocr' && originalImageBase64) {
-      try {
-        const uploaded = await uploadHomeworkImage(
-          req.schoolId,
-          originalImageBase64,
-          originalImageMediaType || 'image/jpeg',
-        );
-        originalImageUrl = uploaded.url;
-        originalImageStoragePath = uploaded.storagePath;
-      } catch (uploadErr) {
-        console.error('Homework image upload failed:', uploadErr.message);
-        return res.status(500).json({ error: 'Failed to save the photo. Please try again.' });
+    const materialsList = linesFromArray(materials);
+    const resolvedSubject = (subject && subject.trim()) || lessonPlan.subject || "Homework";
+
+    let imageBuffer = null;
+    let mediaType = null;
+    if (hasPhoto) {
+      imageBuffer = Buffer.from(photoBase64, "base64");
+      mediaType = photoMediaType || "image/jpeg";
+    }
+
+    // Look up the class name for the PDF header - falls back gracefully if
+    // the classes collection lookup fails for any reason.
+    let className = "";
+    try {
+      const classDoc = await db().collection("schools").doc(req.schoolId).collection("classes").doc(classId).get();
+      if (classDoc.exists) className = classDoc.data().name || "";
+    } catch (_) {
+      // non-fatal - PDF just omits the class name
+    }
+
+    const pdfBuffer = await buildHomeworkPdf({
+      subject: resolvedSubject,
+      className,
+      dueDate: dueDate || "",
+      instructions: instructions || "",
+      materials: materialsList,
+      imageBuffer,
+      imageMediaType: mediaType,
+    });
+
+    const { url: pdfUrl, storagePath: pdfStoragePath } = await uploadHomeworkPdf(req.schoolId, pdfBuffer);
+
+    const now = admin.firestore.FieldValue.serverTimestamp();
+    const docData = {
+      classId,
+      lessonPlanId,
+      teacherId: req.user.uid,
+      subject: resolvedSubject,
+      subStrand: lessonPlan.subStrand || null,
+      instructions: instructions || "",
+      dueDate: dueDate || null,
+      materials: materialsList,
+      sourceType: hasPhoto ? "photo" : "manual",
+      pdfUrl,
+      pdfStoragePath,
+      status: "draft",
+      createdAt: now,
+      updatedAt: now,
+    };
+
+    const ref = await homeworkCollection(req.schoolId).add(docData);
+    const saved = await ref.get();
+    res.status(201).json({ homework: { id: saved.id, ...saved.data() } });
+  } catch (err) {
+    console.error("POST /homework failed:", err);
+    res.status(500).json({ error: err.message || "Couldn't save homework." });
+  }
+});
+
+// ---------- PUT /:id - edit while still a draft ----------
+router.put("/:id", async (req, res) => {
+  try {
+    const ref = homeworkCollection(req.schoolId).doc(req.params.id);
+    const existing = await ref.get();
+    if (!existing.exists) return res.status(404).json({ error: "Homework not found." });
+    const current = existing.data();
+
+    if (current.status !== "draft") {
+      return res.status(400).json({ error: "Only draft homework can be edited." });
+    }
+    if (req.role === "teacher" && current.teacherId !== req.user.uid) {
+      return res.status(403).json({ error: "That's not your homework." });
+    }
+
+    const { subject, instructions, dueDate, materials, photoBase64, photoMediaType } = req.body;
+    const hasInstructions = typeof instructions === "string" && instructions.trim().length > 0;
+    const hasNewPhoto = typeof photoBase64 === "string" && photoBase64.length > 0;
+    // Keeping the existing PDF's photo is fine if neither instructions nor a
+    // new photo are supplied - but if both come back empty AND there was no
+    // photo before either, there'd be nothing to put on the page.
+    if (!hasInstructions && !hasNewPhoto && current.sourceType !== "photo") {
+      return res.status(400).json({ error: "Add a photo of the homework note, or type instructions, before saving." });
+    }
+
+    const materialsList = linesFromArray(materials);
+    const resolvedSubject = (subject && subject.trim()) || current.subject;
+
+    let imageBuffer = null;
+    let mediaType = null;
+    if (hasNewPhoto) {
+      imageBuffer = Buffer.from(photoBase64, "base64");
+      mediaType = photoMediaType || "image/jpeg";
+    }
+
+    let className = "";
+    try {
+      const classDoc = await db().collection("schools").doc(req.schoolId).collection("classes").doc(current.classId).get();
+      if (classDoc.exists) className = classDoc.data().name || "";
+    } catch (_) {
+      // non-fatal
+    }
+
+    // Regenerate the PDF whenever text or a new photo changed. If nothing
+    // photo-related changed, we still rebuild from the new text fields plus
+    // the OLD photo isn't re-embeddable without re-fetching it from
+    // Storage - so a new photo is required to change the image; text-only
+    // edits regenerate a text-only-refresh over the previous photo is out
+    // of scope for this simple flow. To keep it predictable: if a new photo
+    // wasn't provided, fall back to re-rendering without an image whenever
+    // sourceType was "manual", and keep the OLD pdf/photo untouched
+    // (skip regeneration) when sourceType is "photo" and no new photo was
+    // sent - only the text fields on the record change in that case.
+    let pdfUrl = current.pdfUrl;
+    let pdfStoragePath = current.pdfStoragePath;
+
+    if (hasNewPhoto || current.sourceType !== "photo") {
+      const pdfBuffer = await buildHomeworkPdf({
+        subject: resolvedSubject,
+        className,
+        dueDate: dueDate || "",
+        instructions: instructions || "",
+        materials: materialsList,
+        imageBuffer,
+        imageMediaType: mediaType,
+      });
+      const uploaded = await uploadHomeworkPdf(req.schoolId, pdfBuffer);
+      pdfUrl = uploaded.url;
+      pdfStoragePath = uploaded.storagePath;
+
+      // Clean up the previous PDF file now that a new one replaced it.
+      if (current.pdfStoragePath && current.pdfStoragePath !== pdfStoragePath) {
+        deleteHomeworkFile(current.pdfStoragePath).catch((e) => console.error("Couldn't delete old homework PDF:", e.message));
       }
     }
 
-    const homeworkData = {
-      teacherId: req.user.uid,
-      classId,
-      lessonPlanId,
-      subStrand: lessonPlanDoc.data().subStrand || '', // inherited for analytics roll-up
-      subject: subject || lessonPlanDoc.data().subject || '',
-      instructions,
-      dueDate: dueDate || null,
-      materials: materials || [],
-      sourceType: sourceType === 'ocr' ? 'ocr' : 'manual',
-      originalImageUrl,
-      originalImageStoragePath,
-      status: 'draft',
-      createdAt: admin.firestore.FieldValue.serverTimestamp(),
-      updatedAt: admin.firestore.FieldValue.serverTimestamp(),
-    };
-
-    const ref = await db()
-      .collection('schools').doc(req.schoolId)
-      .collection('homework').add(homeworkData);
-
-    res.status(201).json({ id: ref.id, ...homeworkData });
-  } catch (err) {
-    console.error('Create homework failed:', err.message);
-    res.status(500).json({ error: 'Failed to create homework' });
-  }
-});
-
-// PUT /api/homework/:id - edit (teacher only, own, only while draft)
-router.put('/:id', requireAuth, blockReadOnlyRoles, async (req, res) => {
-  try {
-    if (req.role !== 'teacher') {
-      return res.status(403).json({ error: 'Only teachers edit homework' });
-    }
-
-    const ref = db().collection('schools').doc(req.schoolId).collection('homework').doc(req.params.id);
-    const doc = await ref.get();
-    if (!doc.exists) return res.status(404).json({ error: 'Homework not found' });
-
-    const existing = doc.data();
-    if (existing.teacherId !== req.user.uid) {
-      return res.status(403).json({ error: 'Teachers can only edit their own homework' });
-    }
-    if (existing.status !== 'draft') {
-      return res.status(403).json({ error: 'Homework is locked from edits once published' });
-    }
-
-    const updates = { updatedAt: admin.firestore.FieldValue.serverTimestamp() };
-    ['subject', 'instructions', 'dueDate', 'materials'].forEach((field) => {
-      if (req.body[field] !== undefined) updates[field] = req.body[field];
-    });
-
-    await ref.update(updates);
-    const updatedDoc = await ref.get();
-    res.json({ id: updatedDoc.id, ...updatedDoc.data() });
-  } catch (err) {
-    console.error('Update homework failed:', err.message);
-    res.status(500).json({ error: 'Failed to update homework' });
-  }
-});
-
-// POST /api/homework/:id/publish - teacher only, own draft homework.
-// Marks it published and returns a click-to-chat WhatsApp link per parent
-// (Level 2 - no WhatsApp Business API call, no Meta setup, no per-message
-// cost). The teacher taps Send on each parent's link from the frontend.
-router.post('/:id/publish', requireAuth, blockReadOnlyRoles, async (req, res) => {
-  try {
-    if (req.role !== 'teacher') {
-      return res.status(403).json({ error: 'Only teachers publish homework' });
-    }
-
-    const ref = db().collection('schools').doc(req.schoolId).collection('homework').doc(req.params.id);
-    const doc = await ref.get();
-    if (!doc.exists) return res.status(404).json({ error: 'Homework not found' });
-
-    const homework = doc.data();
-    if (homework.teacherId !== req.user.uid) {
-      return res.status(403).json({ error: 'Teachers can only publish their own homework' });
-    }
-    if (homework.status !== 'draft') {
-      return res.status(400).json({ error: 'Only a draft can be published' });
-    }
-
-    const parentsSnap = await db()
-      .collection('schools').doc(req.schoolId)
-      .collection('parents').where('classId', '==', homework.classId).get();
-
-    const messageBody = `Homework - ${homework.subject || 'Class'}: ${homework.instructions}` +
-      (homework.dueDate ? `\nDue: ${homework.dueDate}` : '') +
-      (homework.originalImageUrl ? `\nView the actual note (with any diagrams): ${homework.originalImageUrl}` : '');
-
     await ref.update({
-      status: 'published',
-      publishedAt: admin.firestore.FieldValue.serverTimestamp(),
+      subject: resolvedSubject,
+      instructions: instructions || "",
+      dueDate: dueDate || null,
+      materials: materialsList,
+      sourceType: hasNewPhoto ? "photo" : current.sourceType,
+      pdfUrl,
+      pdfStoragePath,
       updatedAt: admin.firestore.FieldValue.serverTimestamp(),
     });
 
-    const parents = parentsSnap.docs
-      .map((d) => {
-        const p = d.data();
-        const phone = p.whatsappNumber || p.phone;
-        return {
-          id: d.id,
-          name: p.name,
-          childName: p.childName || '',
-          phone,
-          waLink: phone ? buildClickToChatLink(phone, messageBody) : null,
-        };
-      })
-      .filter((p) => p.waLink);
-
-    res.json({ success: true, id: req.params.id, status: 'published', messageBody, parents });
+    const updated = await ref.get();
+    res.json({ homework: { id: updated.id, ...updated.data() } });
   } catch (err) {
-    console.error('Publish homework failed:', err.message);
-    res.status(500).json({ error: 'Failed to publish homework' });
+    console.error("PUT /homework/:id failed:", err);
+    res.status(500).json({ error: err.message || "Couldn't update homework." });
   }
 });
 
-// DELETE /api/homework/:id - teacher only, own, only while draft
-router.delete('/:id', requireAuth, blockReadOnlyRoles, async (req, res) => {
+// ---------- POST /:id/publish ----------
+// No WhatsApp send happens here - see the file-header note. This just marks
+// the record published so the frontend knows to render Send links.
+router.post("/:id/publish", async (req, res) => {
   try {
-    if (req.role !== 'teacher') {
-      return res.status(403).json({ error: 'Only teachers delete homework' });
+    const ref = homeworkCollection(req.schoolId).doc(req.params.id);
+    const existing = await ref.get();
+    if (!existing.exists) return res.status(404).json({ error: "Homework not found." });
+    const current = existing.data();
+
+    if (req.role === "teacher" && current.teacherId !== req.user.uid) {
+      return res.status(403).json({ error: "That's not your homework." });
+    }
+    if (current.status === "published") {
+      return res.status(400).json({ error: "Already published." });
     }
 
-    const ref = db().collection('schools').doc(req.schoolId).collection('homework').doc(req.params.id);
-    const doc = await ref.get();
-    if (!doc.exists) return res.status(404).json({ error: 'Homework not found' });
+    await ref.update({ status: "published", publishedAt: admin.firestore.FieldValue.serverTimestamp() });
+    const updated = await ref.get();
+    res.json({ homework: { id: updated.id, ...updated.data() } });
+  } catch (err) {
+    console.error("POST /homework/:id/publish failed:", err);
+    res.status(500).json({ error: err.message || "Couldn't publish homework." });
+  }
+});
 
-    const existing = doc.data();
-    if (existing.teacherId !== req.user.uid) {
-      return res.status(403).json({ error: 'Teachers can only delete their own homework' });
+// ---------- DELETE /:id - draft only ----------
+router.delete("/:id", async (req, res) => {
+  try {
+    const ref = homeworkCollection(req.schoolId).doc(req.params.id);
+    const existing = await ref.get();
+    if (!existing.exists) return res.status(404).json({ error: "Homework not found." });
+    const current = existing.data();
+
+    if (current.status !== "draft") {
+      return res.status(400).json({ error: "Only draft homework can be deleted." });
     }
-    if (existing.status !== 'draft') {
-      return res.status(403).json({ error: 'Only a draft can be deleted' });
+    if (req.role === "teacher" && current.teacherId !== req.user.uid) {
+      return res.status(403).json({ error: "That's not your homework." });
     }
 
     await ref.delete();
-
-    // Clean up the Storage file too, so deleted drafts don't leave orphaned
-    // images behind. Best-effort - a failure here shouldn't block the
-    // delete response, since the Firestore record is already gone.
-    if (existing.originalImageStoragePath) {
-      try {
-        await admin.storage().bucket().file(existing.originalImageStoragePath).delete();
-      } catch (storageErr) {
-        console.error('Homework image cleanup failed (non-fatal):', storageErr.message);
-      }
+    if (current.pdfStoragePath) {
+      deleteHomeworkFile(current.pdfStoragePath).catch((e) => console.error("Couldn't delete homework PDF:", e.message));
     }
-
-    res.json({ success: true, id: req.params.id });
+    res.json({ ok: true });
   } catch (err) {
-    console.error('Delete homework failed:', err.message);
-    res.status(500).json({ error: 'Failed to delete homework' });
+    console.error("DELETE /homework/:id failed:", err);
+    res.status(500).json({ error: err.message || "Couldn't delete homework." });
   }
 });
 
