@@ -2,6 +2,18 @@ rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
 
+    // Short links for homework PDFs sent to parents on WhatsApp
+    // (https://<app>/h/<code>). Each doc holds only { pdfUrl, createdAt } and
+    // is written by the backend's Admin SDK when homework is published.
+    // Anyone may fetch ONE code they already have (that's what the parent's
+    // link does, with no login) - but nobody can list or search the
+    // collection, so codes can't be enumerated. The PDF link inside is the
+    // same one the parent could already open, so this exposes nothing new.
+    match /homeworkLinks/{code} {
+      allow get: if true;
+      allow list, write: if false;
+    }
+
     // A user can only read/write data under the school they belong to.
     // Requires a custom claim `schoolId` set on the Firebase Auth user
     // (set this server-side when an admin/teacher account is created).
